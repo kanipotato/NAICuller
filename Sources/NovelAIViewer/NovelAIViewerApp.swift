@@ -1,9 +1,23 @@
+import AppKit
 import SwiftUI
+
+/// アプリ終了時の後片付け（常駐exiftoolプロセスの穏当な終了）のためだけのデリゲート。
+/// レビュー指摘：終了処理を持たないと、通常のアプリ終了（Cmd+Q等、`NSApplication`が
+/// 内部で`exit()`する経路）ではSwiftのdeinitチェーンが保証されず、exiftoolの子プロセスが
+/// オーファンとして残り続けることを実機で確認した。
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    weak var appModel: AppModel?
+
+    func applicationWillTerminate(_ notification: Notification) {
+        appModel?.shutdown()
+    }
+}
 
 @main
 struct NovelAIViewerApp: App {
     @StateObject private var appModel = AppModel()
     @State private var keyCommandHandler: KeyCommandHandler?
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
         WindowGroup {
@@ -16,6 +30,7 @@ struct NovelAIViewerApp: App {
                         handler.start()
                         keyCommandHandler = handler
                     }
+                    appDelegate.appModel = appModel
                 }
         }
         .windowResizability(.contentSize)

@@ -47,6 +47,11 @@ final class AppModel: ObservableObject {
     @Published var showOrphanConfirmation = false
 
     private var toastDismissTask: Task<Void, Never>?
+    /// `toggleTag`が非同期（ExifTool書き込み待ち）の間、同じ(画像, タグ)への二重トグルを
+    /// 防ぐための進行中セット（レビュー指摘の修正：キーリピート等で同じキーが連打されると、
+    /// 1回目の完了を待たずに2回目が同じ`currentlyTagged`スナップショットを読んでしまい、
+    /// add/removeが二重に走りうる）。キーは"\(imageId)-\(tagId)"。
+    private var inFlightToggles: Set<String> = []
 
     // MARK: - 起動
 
@@ -72,6 +77,16 @@ final class AppModel: ObservableObject {
         imageRepository = ImageRepository(db: db)
         tagRepository = TagRepository(db: db)
         thumbnailService = ThumbnailService(bundleIdentifier: Self.bundleIdentifier)
+    }
+
+    /// アプリ終了時に呼ぶ後片付け。常駐させているexiftoolプロセスへ`-stay_open False`を
+    /// 送って穏当に終了させる（レビュー指摘の修正：`ExifToolProcess.deinit`はある物の、
+    /// 通常のアプリ終了は`NSApplication`が内部で`exit()`する経路のため、その時点で
+    /// まだ参照が生きているオブジェクトのdeinitはSwiftランタイムの保証対象外＝
+    /// 呼ばれないことがある。`applicationWillTerminate`から明示的にこれを呼ぶことで、
+    /// プロセスがオーファンとして残り続けるのを防ぐ）。
+    func shutdown() {
+        exifToolService?.close()
     }
 
     /// ExifToolの検出をやり直す（起動時／設定画面の「再チェック」ボタンから呼ぶ）。
@@ -219,6 +234,10 @@ final class AppModel: ObservableObject {
             return
         }
         guard let tag = tags.first(where: { $0.id == tagId }) else { return }
+        let key = "\(image.id)-\(tagId)"
+        // 同じ(画像, タグ)への書き込みが既に進行中なら、キーリピート等による二重トグルとして無視する。
+        guard !inFlightToggles.contains(key) else { return }
+        inFlightToggles.insert(key)
         let currentlyTagged = imageTagIds[image.id]?.contains(tagId) ?? false
 
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -241,11 +260,13 @@ final class AppModel: ObservableObject {
                     } catch {
                         self.presentAlert(message: "DBの更新に失敗した", informative: "\(error)")
                     }
+                    self.inFlightToggles.remove(key)
                 }
             } catch {
                 await MainActor.run {
                     // 詳細設計 5章：ExifTool書き込み失敗 → トースト通知でファイル名とエラー内容を表示。DBは変更しない。
                     self.showToast("「\(image.url.lastPathComponent)」へのタグ付けに失敗: \(error)")
+                    self.inFlightToggles.remove(key)
                 }
             }
         }

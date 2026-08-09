@@ -66,11 +66,19 @@ public final class DatabaseService {
 
     private var db: OpaquePointer?
     private let queue = DispatchQueue(label: "com.kanipotato.NovelAIViewer.DatabaseService")
+    /// `queue`上で実行中かどうかをスレッドローカルに判定するためのキー。
+    /// `transaction(_:)`がBEGIN〜COMMITを1回の`sync`で囲えるようにする
+    /// （レビュー指摘：BEGIN/body/COMMITを別々の`queue.sync`に分けると、bodyの実行中に
+    /// 他スレッドの呼び出しが割り込んでトランザクションの原子性が崩れうる。かといって
+    /// `queue.sync`をネストすると同一スレッドからの再入でデッドロックするため、
+    /// 「既にqueue上にいるなら素通しする」再入可能な同期ヘルパーにしている）。
+    private let queueKey = DispatchSpecificKey<Void>()
     public let path: String
 
     /// - Parameter path: DBファイルパス。テストでは`":memory:"`を渡してオンメモリDBにできる。
     public init(path: String) throws {
         self.path = path
+        queue.setSpecific(key: queueKey, value: ())
         var handle: OpaquePointer?
         // SQLITE_OPEN_FULLMUTEX: 内部で直列queueに通してはいるが、sqlite3側の
         // スレッドセーフモードも保険として有効にしておく。
@@ -83,6 +91,15 @@ public final class DatabaseService {
         self.db = handle
         try execute("PRAGMA foreign_keys = ON;")
         try migrate()
+    }
+
+    /// `queue.sync`の再入可能版。既に`queue`上で実行中のスレッドから呼ばれた場合は
+    /// 素通しで直接実行し（デッドロック回避）、それ以外は通常通り`queue.sync`で直列化する。
+    private func sync<T>(_ block: () throws -> T) rethrows -> T {
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            return try block()
+        }
+        return try queue.sync(execute: block)
     }
 
     deinit {
@@ -103,7 +120,7 @@ public final class DatabaseService {
 
     private func userVersion() throws -> Int {
         var result = 0
-        try queue.sync {
+        try sync {
             var statement: OpaquePointer?
             defer { sqlite3_finalize(statement) }
             guard sqlite3_prepare_v2(db, "PRAGMA user_version;", -1, &statement, nil) == SQLITE_OK else {
@@ -177,7 +194,7 @@ public final class DatabaseService {
     /// パラメータなしのDDL/PRAGMA用。複数のSQL文をセミコロン区切りでまとめて実行できる
     /// （CREATE TABLE文をそのまま貼れるように sqlite3_exec を使用）。
     public func execute(_ sql: String) throws {
-        try queue.sync {
+        try sync {
             if sqlite3_exec(db, sql, nil, nil, nil) != SQLITE_OK {
                 throw lastError("SQL実行に失敗: \(sql.prefix(80))")
             }
@@ -187,7 +204,7 @@ public final class DatabaseService {
     /// bind変数付きのINSERT/UPDATE/DELETEを実行する。
     @discardableResult
     public func run(_ sql: String, _ bindings: [Value] = []) throws -> Int64 {
-        try queue.sync {
+        try sync {
             var statement: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
                 throw lastError("prepare失敗: \(sql)")
@@ -203,7 +220,7 @@ public final class DatabaseService {
 
     /// SELECT用。`mapRow`で各行を任意の型へ変換する。
     public func query<T>(_ sql: String, _ bindings: [Value] = [], _ mapRow: (Row) -> T) throws -> [T] {
-        try queue.sync {
+        try sync {
             var statement: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
                 throw lastError("prepare失敗: \(sql)")
@@ -226,14 +243,26 @@ public final class DatabaseService {
     }
 
     /// トランザクションでまとめて実行する（孤児レコード一括削除など複数書き込みの原子性確保用）。
+    ///
+    /// BEGIN・`body`・COMMIT/ROLLBACKを1回の`sync`呼び出しの中で行う（レビュー指摘の修正）。
+    /// 以前はBEGINとCOMMITがそれぞれ別の`queue.sync`だったため、bodyの実行中（＝queueを
+    /// 一時的に手放している間）に他スレッドの呼び出しが割り込める隙間があった。
+    /// `body`内で呼ばれる`execute`/`run`/`query`は同じスレッドから`sync`ヘルパーを再入するが、
+    /// 既にqueue上にいるため素通しになりデッドロックしない。
     public func transaction(_ body: () throws -> Void) throws {
-        try execute("BEGIN;")
-        do {
-            try body()
-            try execute("COMMIT;")
-        } catch {
-            try? execute("ROLLBACK;")
-            throw error
+        try sync {
+            if sqlite3_exec(db, "BEGIN;", nil, nil, nil) != SQLITE_OK {
+                throw lastError("BEGINに失敗")
+            }
+            do {
+                try body()
+                if sqlite3_exec(db, "COMMIT;", nil, nil, nil) != SQLITE_OK {
+                    throw lastError("COMMITに失敗")
+                }
+            } catch {
+                sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+                throw error
+            }
         }
     }
 

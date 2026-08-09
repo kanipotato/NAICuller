@@ -119,6 +119,44 @@ final class DatabaseServiceTests: XCTestCase {
         XCTAssertTrue(try tagRepo.tagIds(forImage: imageId).isEmpty)
     }
 
+    /// レビュー指摘の回帰テスト：`transaction`の中で複数回`run`/`query`を呼んでも
+    /// デッドロックしないこと（以前はBEGIN/body/COMMITが別々の`queue.sync`だったため、
+    /// 直しかたを誤ると同一スレッドからのネスト`sync`でハングする）。
+    /// `ImageRepository.deleteImages`が実際にこのパターン（ループの中で`db.run`）を使っている。
+    func testTransactionCommitsMultipleWritesWithoutDeadlock() throws {
+        let db = try DatabaseService(path: ":memory:")
+        let imageRepo = ImageRepository(db: db)
+        let rootId = try imageRepo.insertRoot(path: "/tmp/root1")
+        let id1 = try imageRepo.insertImage(rootId: rootId, path: "/tmp/root1/a.png", mtime: 1, fileSize: 1, width: nil, height: nil, promptCache: nil)
+        let id2 = try imageRepo.insertImage(rootId: rootId, path: "/tmp/root1/b.png", mtime: 1, fileSize: 1, width: nil, height: nil, promptCache: nil)
+        let id3 = try imageRepo.insertImage(rootId: rootId, path: "/tmp/root1/c.png", mtime: 1, fileSize: 1, width: nil, height: nil, promptCache: nil)
+
+        try imageRepo.deleteImages(ids: [id1, id2, id3])
+
+        XCTAssertEqual(try imageRepo.fetchImages(rootId: rootId).count, 0)
+    }
+
+    /// トランザクション内で例外が起きたら、途中まで実行された書き込みもロールバックされること。
+    func testTransactionRollsBackAllWritesOnError() throws {
+        struct Boom: Error {}
+        let db = try DatabaseService(path: ":memory:")
+        let imageRepo = ImageRepository(db: db)
+        let rootId = try imageRepo.insertRoot(path: "/tmp/root1")
+
+        XCTAssertThrowsError(
+            try db.transaction {
+                try db.run(
+                    "INSERT INTO images (root_id, path, mtime, file_size, last_scanned_at) VALUES (?, ?, ?, ?, ?);",
+                    [.integer(rootId), .text("/tmp/root1/x.png"), .real(1), .integer(1), .text("now")]
+                )
+                throw Boom()
+            }
+        )
+
+        // BEGIN後の書き込みがROLLBACKで消えていること（コミットされて残っていないこと）。
+        XCTAssertEqual(try imageRepo.fetchImages(rootId: rootId).count, 0)
+    }
+
     func testMigrationIsIdempotentWhenReopeningSamePath() throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
