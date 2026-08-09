@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import NovelAIViewerCore
 
 /// メインウィンドウ。サイドバー／サムネイルグリッド／右パネルの3ペイン構成（詳細設計 1章）。
@@ -8,6 +9,8 @@ struct MainWindowView: View {
     @EnvironmentObject private var appModel: AppModel
     @State private var showExifToolMissingAlert = false
     @State private var rootAdditionError: String?
+    @State private var showExportPopover = false
+    @State private var exportFields: Set<ExportFieldKind> = Set(ExportFieldKind.allCases)
 
     var body: some View {
         HSplitView {
@@ -99,6 +102,62 @@ struct MainWindowView: View {
             }
             .disabled(!appModel.exifToolAvailable || appModel.isScanning || appModel.roots.isEmpty)
         }
+
+        ToolbarItem {
+            Button {
+                showExportPopover = true
+            } label: {
+                Label("エクスポート", systemImage: "square.and.arrow.up")
+            }
+            .disabled(appModel.selectedImageIds.isEmpty)
+            .popover(isPresented: $showExportPopover) {
+                exportPopoverContent
+            }
+        }
+    }
+
+    // MARK: - エクスポート（詳細設計 4-3章：項目チェックボックス最低1つ必須、NSSavePanelで保存先選択）
+
+    @ViewBuilder
+    private var exportPopoverContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("エクスポート項目").font(.headline)
+            ForEach(ExportFieldKind.allCases) { field in
+                Toggle(isOn: Binding(
+                    get: { exportFields.contains(field) },
+                    set: { isOn in
+                        if isOn { exportFields.insert(field) } else { exportFields.remove(field) }
+                    }
+                )) {
+                    Text(field.displayName)
+                }
+            }
+            Text("選択中の\(appModel.selectedImageIds.count)件を書き出すよ")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("保存先を選んでエクスポート") { performExport() }
+                    // 最低1項目必須。0件時はエクスポートボタン無効化（詳細設計 2章）。
+                    .disabled(exportFields.isEmpty)
+            }
+        }
+        .padding()
+        .frame(width: 260)
+    }
+
+    private func performExport() {
+        let selectedImages = appModel.filteredImages.filter { appModel.selectedImageIds.contains($0.id) }
+        guard !selectedImages.isEmpty, !exportFields.isEmpty else { return }
+
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = ExportService.defaultFileName()
+        panel.allowedContentTypes = [.json]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let orderedFields = ExportFieldKind.allCases.filter { exportFields.contains($0) }
+        appModel.exportImages(selectedImages, fields: orderedFields, to: url)
+        showExportPopover = false
     }
 
     @ViewBuilder
