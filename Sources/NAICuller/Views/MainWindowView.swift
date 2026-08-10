@@ -96,6 +96,18 @@ struct MainWindowView: View {
         }
 
         ToolbarItem {
+            // Finderの「表示 > 並び替え」相当。「追加日時」はDBに無いのでmtimeで代用している
+            // （ImageSortOrderのコメント参照）。
+            Picker("並び替え", selection: $appModel.sortOrder) {
+                ForEach(ImageSortOrder.allCases) { order in
+                    Text(order.displayName).tag(order)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 170)
+        }
+
+        ToolbarItem {
             Button {
                 appModel.rescan()
             } label: {
@@ -222,17 +234,50 @@ struct MainWindowView: View {
         showExportPopover = false
     }
 
-    @ViewBuilder
     private var tagFilterBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // タグを付ける前の画像は当然まだタグで絞り込めないので、その手前の絞り込み手段として
+            // プロンプト本文の部分一致検索を用意した（タグ付け作業の入り口）。
+            promptSearchField
+            tagChipsRow
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+
+    private var promptSearchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+            TextField("プロンプトで絞り込み", text: $appModel.promptSearchText)
+                .textFieldStyle(.plain)
+                .font(.caption)
+            if !appModel.promptSearchText.isEmpty {
+                Button {
+                    appModel.promptSearchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+        .frame(maxWidth: 280, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var tagChipsRow: some View {
         if appModel.selectedTagIds.isEmpty {
             HStack {
-                Text("絞り込みなし")
+                Text("タグ絞り込みなし")
                     .foregroundStyle(.secondary)
                     .font(.caption)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
         } else {
             FlowLayout(spacing: 6) {
                 ForEach(appModel.tags.filter { appModel.selectedTagIds.contains($0.id) }) { tag in
@@ -258,8 +303,6 @@ struct MainWindowView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
         }
     }
 

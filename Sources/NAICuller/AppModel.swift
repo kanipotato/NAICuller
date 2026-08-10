@@ -31,11 +31,29 @@ final class AppModel: ObservableObject {
     @Published private(set) var tagCounts: [Int64: Int] = [:]
     @Published private(set) var images: [ImageRecord] = []
     @Published private(set) var imageTagIds: [Int64: Set<Int64>] = [:] // imageId -> tagIds（グリッド/フィルタ用キャッシュ）
+    /// ルート・タグ・プロンプト検索・並び替えを適用した結果。グリッド・エクスポート対象は
+    /// すべてこれを見る。フィルタ条件が変わるたびに`refreshFilteredImages()`で再計算する
+    /// キャッシュ（1万枚超を毎フレーム計算し直すのを避けるため。以前は`var`の計算プロパティ
+    /// だったが、並び替え追加でファイル名の`localizedStandardCompare`のような重い比較が
+    /// 増えたのを機に、明示的な再計算タイミングを持つ形に変更した）。
+    @Published private(set) var filteredImages: [ImageRecord] = []
 
-    @Published var selectedTagIds: Set<Int64> = []
+    @Published var selectedTagIds: Set<Int64> = [] {
+        didSet { refreshFilteredImages() }
+    }
     /// サイドバーのルートチェックボックスで有効化されているルート（未チェックのルート配下の画像は
     /// グリッドから一時的に除外する。DBからは削除しない表示フィルタ）。
-    @Published var enabledRootIds: Set<Int64> = []
+    @Published var enabledRootIds: Set<Int64> = [] {
+        didSet { refreshFilteredImages() }
+    }
+    /// プロンプト本文に対する部分一致検索（大文字小文字は区別しない）。空文字なら絞り込まない。
+    /// タグを付ける前の画像を「プロンプトの内容」で見つけるための入り口として追加した。
+    @Published var promptSearchText: String = "" {
+        didSet { refreshFilteredImages() }
+    }
+    @Published var sortOrder: ImageSortOrder = .dateNewest {
+        didSet { refreshFilteredImages() }
+    }
     @Published var selectedImageIds: Set<Int64> = []
     @Published var focusedImageId: Int64?
     @Published var thumbnailSize: ThumbnailSize = .medium
@@ -139,17 +157,24 @@ final class AppModel: ObservableObject {
             mapping[image.id] = (try? tagRepository.tagIds(forImage: image.id)) ?? []
         }
         imageTagIds = mapping
+        refreshFilteredImages()
     }
 
-    /// サイドバーのルートチェックボックス・タグ絞り込み（AND条件：選択した全タグを持つ画像のみ）を
-    /// 適用した結果。グリッド・エクスポート対象はすべてこれを見る。
-    var filteredImages: [ImageRecord] {
-        images.filter { image in
+    /// サイドバーのルートチェックボックス・タグ絞り込み（AND条件：選択した全タグを持つ画像のみ）・
+    /// プロンプト検索を適用し、`sortOrder`で並び替えた結果を`filteredImages`に反映する。
+    private func refreshFilteredImages() {
+        let narrowed = images.filter { image in
             guard enabledRootIds.contains(image.rootId) else { return false }
-            guard !selectedTagIds.isEmpty else { return true }
-            guard let tagIds = imageTagIds[image.id] else { return false }
-            return selectedTagIds.isSubset(of: tagIds)
+            if !selectedTagIds.isEmpty {
+                guard let tagIds = imageTagIds[image.id], selectedTagIds.isSubset(of: tagIds) else { return false }
+            }
+            if !promptSearchText.isEmpty {
+                guard let prompt = image.promptCache,
+                      prompt.range(of: promptSearchText, options: [.caseInsensitive]) != nil else { return false }
+            }
+            return true
         }
+        filteredImages = sortOrder.sorted(narrowed)
     }
 
     // MARK: - ルート管理
@@ -273,9 +298,89 @@ final class AppModel: ObservableObject {
     }
 
     /// キー割当（F/G/1〜9）からタグを引いてトグルする。KeyCommandHandlerから呼ばれる。
-    func toggleTag(forKey key: String, on image: ImageRecord) {
+    /// 複数選択中は選択中の全画像に一括適用する。
+    func toggleTag(forKey key: String, on images: [ImageRecord]) {
         guard let tag = tags.first(where: { $0.keyBinding == key }) else { return } // 未設定なら何もしない（4-2章）
-        toggleTag(tagId: tag.id, on: image)
+        toggleTag(tagId: tag.id, on: images)
+    }
+
+    /// 複数選択がある場合の一括タグ付け（実際に使ってみてのフィードバックを受けて追加。
+    /// 詳細設計では「複数選択時の一括タグ付け」をMVP外としていたが、キーボード操作の
+    /// 自然な延長として必要だった）。
+    ///
+    /// Photos.app等と同じトライステート方式：選択中の全画像が既にタグを持っていれば全て外す、
+    /// そうでなければ（1件でも未タグがあれば）全てに付ける。1枚だけの選択は単体版と同じ挙動になる
+    /// （単体版のガード・エラー表示をそのまま再利用するため、1枚のときはそちらに委譲する）。
+    func toggleTag(tagId: Int64, on images: [ImageRecord]) {
+        guard !images.isEmpty else { return }
+        guard images.count > 1 else {
+            toggleTag(tagId: tagId, on: images[0])
+            return
+        }
+        guard let exifToolService else {
+            presentAlert(message: "ExifToolが利用できないためタグ付けできない", informative: nil)
+            return
+        }
+        guard let tag = tags.first(where: { $0.id == tagId }) else { return }
+
+        let allTagged = images.allSatisfy { imageTagIds[$0.id]?.contains(tagId) ?? false }
+        let shouldAdd = !allTagged
+        let targets = images.filter { image in
+            let currentlyTagged = imageTagIds[image.id]?.contains(tagId) ?? false
+            return shouldAdd ? !currentlyTagged : currentlyTagged
+        }
+        guard !targets.isEmpty else { return }
+
+        let keys = targets.map { "\($0.id)-\(tagId)" }
+        guard keys.allSatisfy({ !inFlightToggles.contains($0) }) else { return }
+        inFlightToggles.formUnion(keys)
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            var writeSucceeded: [Int64] = []
+            var writeFailed: [String] = []
+            for image in targets {
+                do {
+                    if shouldAdd {
+                        try exifToolService.addTag(tag.name, to: image.path)
+                    } else {
+                        try exifToolService.removeTag(tag.name, from: image.path)
+                    }
+                    writeSucceeded.append(image.id)
+                } catch {
+                    writeFailed.append(image.url.lastPathComponent)
+                }
+            }
+            // ここから先はMainActor.run側のクロージャに渡すだけの読み取り専用データにする。
+            // varのまま`Task.detached`と`MainActor.run`の2つのクロージャに跨って参照/mutateすると
+            // Swift 6の厳格な並行性チェックで警告（将来的にはエラー）になるため、`let`に固定してから渡す。
+            let succeededIds = writeSucceeded
+            let failedCount = writeFailed.count
+            await MainActor.run {
+                var dbFailedCount = 0
+                for imageId in succeededIds {
+                    do {
+                        if shouldAdd {
+                            try self.tagRepository.addTagToImage(imageId: imageId, tagId: tagId)
+                        } else {
+                            try self.tagRepository.removeTagFromImage(imageId: imageId, tagId: tagId)
+                        }
+                    } catch {
+                        dbFailedCount += 1
+                    }
+                }
+                self.reloadTags()
+                self.reloadImages()
+                self.inFlightToggles.subtract(keys)
+                let updatedCount = succeededIds.count - dbFailedCount
+                let totalFailedCount = failedCount + dbFailedCount
+                if totalFailedCount == 0 {
+                    self.showToast("\(updatedCount)件のタグを更新したよ")
+                } else {
+                    self.showToast("\(updatedCount)件成功・\(totalFailedCount)件失敗")
+                }
+            }
+        }
     }
 
     /// 自由入力タグの追加。既存タグがあれば（大文字小文字区別なく）それに紐付け、新規作成しない。

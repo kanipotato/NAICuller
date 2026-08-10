@@ -60,14 +60,15 @@ final class KeyCommandHandler {
 
         guard let characters = event.charactersIgnoringModifiers?.lowercased() else { return false }
 
-        guard let focusedImage = currentFocusedImage(appModel) else { return false }
+        let targets = currentTargetImages(appModel)
+        guard !targets.isEmpty else { return false }
 
         switch characters {
         case "f", "g":
-            appModel.toggleTag(forKey: characters.uppercased(), on: focusedImage)
+            appModel.toggleTag(forKey: characters.uppercased(), on: targets)
             return true
         case "1", "2", "3", "4", "5", "6", "7", "8", "9":
-            appModel.toggleTag(forKey: characters, on: focusedImage)
+            appModel.toggleTag(forKey: characters, on: targets)
             return true
         default:
             return false
@@ -80,6 +81,17 @@ final class KeyCommandHandler {
             return image
         }
         return list.first
+    }
+
+    /// タグ付け操作の対象。複数選択中（グリッドでcmd/shift-クリック等）なら選択中の全画像、
+    /// そうでなければフォーカス中の1枚（矢印キーでのプレビュー対象）を返す
+    /// （実際に使ってみてのフィードバックを受けて、複数選択時の一括タグ付けに対応した）。
+    private func currentTargetImages(_ appModel: AppModel) -> [ImageRecord] {
+        if appModel.selectedImageIds.count > 1 {
+            let list = appModel.filteredImages
+            return list.filter { appModel.selectedImageIds.contains($0.id) }
+        }
+        return currentFocusedImage(appModel).map { [$0] } ?? []
     }
 
     /// 矢印キー：プレビュー（focusedImageId）を維持したまま前後の画像へ移動する。

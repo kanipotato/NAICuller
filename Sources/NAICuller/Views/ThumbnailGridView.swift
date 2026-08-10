@@ -141,31 +141,35 @@ struct ThumbnailGridView: NSViewRepresentable {
             parent.appModel.selectedImageIds = Set(ids)
         }
 
-        // MARK: - 右クリックメニュー（タグ付け・お気に入り・削除対象・単体エクスポート）
+        // MARK: - 右クリックメニュー（タグ付け・お気に入り・削除対象・エクスポート）
         //
         // F/G/1-9キーのトグルも既存タグも「内部的にはすべて同一のタグ機構」（詳細設計1章）なので、
         // 既存タグ一覧をチェック可能なメニュー項目として並べるだけで、お気に入り・削除対象・
         // カスタムタグすべてを右クリックからも操作できる（新しいタグ付けロジックは追加していない、
-        // 既存のtoggleTagをそのまま呼ぶだけ）。
+        // 既存のtoggleTagをそのまま呼ぶだけ）。複数選択中に右クリックした場合は選択中の全画像が
+        // 対象になる（実際に使ってみてのフィードバックを受けて対応）。
 
         /// クリックされた項目が現在の選択に含まれていなければ単独選択に切り替える（Finder同様の挙動）。
+        /// 既に複数選択の一部としてクリックされた場合は、選択中の全画像が対象になる。
         func contextMenu(for indexPath: IndexPath) -> NSMenu? {
             guard indexPath.item < images.count, let collectionView else { return nil }
-            let image = images[indexPath.item]
+            let clickedImage = images[indexPath.item]
             if !collectionView.selectionIndexPaths.contains(indexPath) {
                 collectionView.selectionIndexPaths = [indexPath]
                 syncSelection(collectionView)
-                parent.appModel.focusedImageId = image.id
+                parent.appModel.focusedImageId = clickedImage.id
             }
-            return buildMenu(for: image)
+            let selectedIds = parent.appModel.selectedImageIds
+            let targets = selectedIds.count > 1 ? images.filter { selectedIds.contains($0.id) } : [clickedImage]
+            return buildMenu(for: targets)
         }
 
-        private func buildMenu(for image: ImageRecord) -> NSMenu {
+        private func buildMenu(for targets: [ImageRecord]) -> NSMenu {
             let menu = NSMenu()
-            let currentTagIds = parent.appModel.imageTagIds[image.id] ?? []
+            let appModel = parent.appModel
 
             // お気に入り(F)・削除対象(G)・1〜9キー割当済みタグを先に、キー順で並べる。
-            let sortedTags = parent.appModel.tags.sorted { lhs, rhs in
+            let sortedTags = appModel.tags.sorted { lhs, rhs in
                 let lKey = lhs.keyBinding ?? "~"
                 let rKey = rhs.keyBinding ?? "~"
                 return lKey == rKey ? lhs.name < rhs.name : lKey < rKey
@@ -174,8 +178,10 @@ struct ThumbnailGridView: NSViewRepresentable {
                 let title = tag.keyBinding.map { "\(tag.name)（\($0)）" } ?? tag.name
                 let item = NSMenuItem(title: title, action: #selector(toggleTagFromMenu(_:)), keyEquivalent: "")
                 item.target = self
-                item.state = currentTagIds.contains(tag.id) ? .on : .off
-                item.representedObject = MenuTagAction(imageId: image.id, tagId: tag.id)
+                // 複数選択時は一部だけタグ付きなら`.mixed`（中間状態のダッシュ表示）にする。
+                let taggedCount = targets.filter { appModel.imageTagIds[$0.id]?.contains(tag.id) ?? false }.count
+                item.state = taggedCount == targets.count ? .on : (taggedCount == 0 ? .off : .mixed)
+                item.representedObject = MenuTagAction(imageIds: targets.map(\.id), tagId: tag.id)
                 menu.addItem(item)
             }
             if sortedTags.isEmpty {
@@ -183,32 +189,35 @@ struct ThumbnailGridView: NSViewRepresentable {
             }
 
             menu.addItem(.separator())
-            let exportItem = NSMenuItem(title: "この画像をエクスポート...", action: #selector(exportSingleImageFromMenu(_:)), keyEquivalent: "")
+            let exportTitle = targets.count > 1 ? "選択中の\(targets.count)件をエクスポート..." : "この画像をエクスポート..."
+            let exportItem = NSMenuItem(title: exportTitle, action: #selector(exportImagesFromMenu(_:)), keyEquivalent: "")
             exportItem.target = self
-            exportItem.representedObject = image.id
+            exportItem.representedObject = targets.map(\.id)
             menu.addItem(exportItem)
             return menu
         }
 
         private struct MenuTagAction {
-            let imageId: Int64
+            let imageIds: [Int64]
             let tagId: Int64
         }
 
         @objc private func toggleTagFromMenu(_ sender: NSMenuItem) {
-            guard let action = sender.representedObject as? MenuTagAction,
-                  let image = images.first(where: { $0.id == action.imageId }) else { return }
-            parent.appModel.toggleTag(tagId: action.tagId, on: image)
+            guard let action = sender.representedObject as? MenuTagAction else { return }
+            let targetImages = images.filter { action.imageIds.contains($0.id) }
+            guard !targetImages.isEmpty else { return }
+            parent.appModel.toggleTag(tagId: action.tagId, on: targetImages)
         }
 
-        @objc private func exportSingleImageFromMenu(_ sender: NSMenuItem) {
-            guard let imageId = sender.representedObject as? Int64,
-                  let image = images.first(where: { $0.id == imageId }) else { return }
+        @objc private func exportImagesFromMenu(_ sender: NSMenuItem) {
+            guard let imageIds = sender.representedObject as? [Int64] else { return }
+            let targetImages = images.filter { imageIds.contains($0.id) }
+            guard !targetImages.isEmpty else { return }
             let panel = NSSavePanel()
             panel.nameFieldStringValue = ExportService.defaultFileName()
             panel.allowedContentTypes = [.json]
             guard panel.runModal() == .OK, let url = panel.url else { return }
-            parent.appModel.exportImages([image], fields: ExportFieldKind.allCases, to: url)
+            parent.appModel.exportImages(targetImages, fields: ExportFieldKind.allCases, to: url)
         }
 
         // MARK: - サムネイル読み込み（表示直前の遅延生成。詳細設計 0章）
