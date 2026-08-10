@@ -19,36 +19,46 @@ struct DetailPanelView: View {
     }
 
     var body: some View {
-        if let image = focusedImage {
-            // プレビューはScrollViewの外に固定表示する（末端まで送った後の弾性スクロールで
-            // 提案される高さがフレームごとに微妙に変動し、aspectRatio(.fit)の再計算が連鎖して
-            // プレビューが拡大縮小を繰り返す(ガタつく)不具合があったため。ScrollViewの中に
-            // 置いたままだと画像の高さがスクロールの揺れに依存してしまう構造そのものが原因なので、
-            // 揺れの入力を受けない場所に出すことで根本的に断つ）。
-            VStack(alignment: .leading, spacing: 0) {
-                previewSection(image)
-                    .padding()
-                Divider()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        tagSection(image)
-                        Divider()
-                        systemInfoSection(image)
-                        Divider()
-                        promptSection(image)
+        // `HSplitView`直下（このViewはMainWindowViewでHSplitViewの一員として使われている）で
+        // ルートのView自体の同一性を画像切り替えのたびに変えてしまうと、HSplitViewが
+        // パネル幅をドラッグ後の値ではなく`.frame(idealWidth:)`へ戻してしまう不具合があった
+        // （以前は内側のVStackに`.id(image.id)`を付けていたが、それがルート直下に来る構造に
+        // なっていたため顕在化した）。画像を切り替えてもViewの同一性自体は変えず、
+        // 画像ごとにリセットしたい状態（プロンプト折りたたみ）だけ`onChange`で個別に戻す。
+        Group {
+            if let image = focusedImage {
+                // プレビューはScrollViewの外に固定表示する（末端まで送った後の弾性スクロールで
+                // 提案される高さがフレームごとに微妙に変動し、aspectRatio(.fit)の再計算が連鎖して
+                // プレビューが拡大縮小を繰り返す(ガタつく)不具合があったため。ScrollViewの中に
+                // 置いたままだと画像の高さがスクロールの揺れに依存してしまう構造そのものが原因なので、
+                // 揺れの入力を受けない場所に出すことで根本的に断つ）。
+                VStack(alignment: .leading, spacing: 0) {
+                    previewSection(image)
+                        .padding()
+                    Divider()
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            tagSection(image)
+                            Divider()
+                            systemInfoSection(image)
+                            Divider()
+                            promptSection(image)
+                        }
+                        .padding()
                     }
-                    .padding()
                 }
+            } else {
+                VStack {
+                    Spacer(minLength: 60)
+                    Text("画像を選択してね")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .id(image.id)
-        } else {
-            VStack {
-                Spacer(minLength: 60)
-                Text("画像を選択してね")
-                    .foregroundStyle(.secondary)
-                Spacer()
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .onChange(of: focusedImage?.id) { _ in
+            promptExpanded = false
         }
     }
 
