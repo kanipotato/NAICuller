@@ -1,4 +1,4 @@
-# NovelAIViewer
+# NAICuller
 
 NovelAIで生成したPNG画像（1万枚超）を、タグ付け→絞り込み→選択→JSONエクスポートというワークフローでキーボード中心に仕分けるためのビューワアプリ。
 
@@ -31,10 +31,10 @@ NovelAIで生成したPNG画像（1万枚超）を、タグ付け→絞り込み
 ./build.sh
 ```
 
-`swift build -c release` でコンパイル → ad-hoc署名 → `~/Applications/NovelAIViewer.app` に配置まで自動で行う。起動は:
+`swift build -c release` でコンパイル → ad-hoc署名 → `~/Applications/NAICuller.app` に配置まで自動で行う。起動は:
 
 ```sh
-open ~/Applications/NovelAIViewer.app
+open ~/Applications/NAICuller.app
 ```
 
 ## 使い方
@@ -50,13 +50,13 @@ open ~/Applications/NovelAIViewer.app
 - **SwiftUI**をベースに、性能が必要なサムネイルグリッドだけ`NSViewRepresentable`で`NSCollectionView`を包む（`NSCollectionViewPrefetching`で先読み）
 - **SQLite**は外部依存を追加せず、システム標準の`import SQLite3`を直接使用（GRDB/SQLite.swift等は不使用）
 - **ExifTool**はバイナリを同梱せず、`brew install exiftool`でインストール済みの`/opt/homebrew/bin/exiftool`等を`Process()`で`-stay_open True -@ -`により常駐させ、パイプ経由でコマンドを流す自前ラッパー
-  - `Sources/NovelAIViewerCore/` : DB(`DatabaseService`/`ImageRepository`/`TagRepository`)・ExifTool連携(`ExifToolProcess`/`ExifToolService`)・スキャン差分判定(`ScanService`)・サムネイル生成(`ThumbnailService`)・エクスポート(`ExportService`)・バリデーション(`TagNameValidator`/`RootPathValidator`)など、SwiftUI/AppKitに依存しない純粋なロジック
-  - `Sources/NovelAIViewer/` : `NovelAIViewerApp.swift`（アプリ本体）、`AppModel.swift`（状態管理）、`Views/`（UI本体）、`KeyHandling/`（キーボード操作）
-  - `Tests/NovelAIViewerCoreTests/` : `swift test` で実行する単体・結合テスト（ExifToolServiceTestsは実際にNovelAI生成PNGでexiftoolサブプロセスを起動する結合テスト）
+  - `Sources/NAICullerCore/` : DB(`DatabaseService`/`ImageRepository`/`TagRepository`)・ExifTool連携(`ExifToolProcess`/`ExifToolService`)・スキャン差分判定(`ScanService`)・サムネイル生成(`ThumbnailService`)・エクスポート(`ExportService`)・バリデーション(`TagNameValidator`/`RootPathValidator`)など、SwiftUI/AppKitに依存しない純粋なロジック
+  - `Sources/NAICuller/` : `NAICullerApp.swift`（アプリ本体）、`AppModel.swift`（状態管理）、`Views/`（UI本体）、`KeyHandling/`（キーボード操作）
+  - `Tests/NAICullerCoreTests/` : `swift test` で実行する単体・結合テスト（ExifToolServiceTestsは実際にNovelAI生成PNGでexiftoolサブプロセスを起動する結合テスト）
 
 ## タグの保存先
 
-タグの正データは画像ファイル側のメタデータ（`XMP:Subject`、`-XMP-dc:Subject`で読み書き）に持たせる。NovelAIが生成時に書き込む`PNG:Description`（プロンプト本文）・`PNG:Comment`（生成パラメータ）とは別の名前空間なので衝突しない。DB（`~/Library/Application Support/io.github.kanipotato.novelaiviewer/db.sqlite`）はあくまで表示高速化用のキャッシュであり、削除しても再スキャンでタグを復元できる。
+タグの正データは画像ファイル側のメタデータ（`XMP:Subject`、`-XMP-dc:Subject`で読み書き）に持たせる。NovelAIが生成時に書き込む`PNG:Description`（プロンプト本文）・`PNG:Comment`（生成パラメータ）とは別の名前空間なので衝突しない。DB（`~/Library/Application Support/io.github.kanipotato.naiculler/db.sqlite`）はあくまで表示高速化用のキャッシュであり、削除しても再スキャンでタグを復元できる。
 
 ## 制限事項（MVP外）
 

@@ -14,7 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 @main
-struct NovelAIViewerApp: App {
+struct NAICullerApp: App {
     @StateObject private var appModel = AppModel()
     @State private var keyCommandHandler: KeyCommandHandler?
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate

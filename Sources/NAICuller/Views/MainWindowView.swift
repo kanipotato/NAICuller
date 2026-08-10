@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
-import NovelAIViewerCore
+import NAICullerCore
 
 /// メインウィンドウ。サイドバー／サムネイルグリッド／右パネルの3ペイン構成（詳細設計 1章）。
 /// `HSplitView`で構成し、右パネルの幅をドラッグでリサイズ可能にする。
@@ -10,6 +10,7 @@ struct MainWindowView: View {
     @State private var showExifToolMissingAlert = false
     @State private var rootAdditionError: String?
     @State private var showExportPopover = false
+    @State private var showShortcutsHelp = false
     @State private var exportFields: Set<ExportFieldKind> = Set(ExportFieldKind.allCases)
 
     var body: some View {
@@ -17,8 +18,16 @@ struct MainWindowView: View {
             SidebarView()
                 .frame(minWidth: 200, idealWidth: 240, maxWidth: 320)
 
-            ThumbnailGridView()
-                .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 0) {
+                // タグ絞り込みの現在地表示。以前はツールバーの`.principal`(中央固定)に
+                // 置いていたが、中央揃え・丸いピル表示が見づらいとの指摘を受けて、
+                // グリッド上部に左寄せで移動した。フィルタが増えても折り返して
+                // 縦に伸びるだけで横にはみ出さないよう`FlowLayout`で並べる。
+                tagFilterBar
+                Divider()
+                ThumbnailGridView()
+            }
+            .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
 
             DetailPanelView()
                 .frame(minWidth: 260, idealWidth: 320, maxWidth: 480)
@@ -68,10 +77,6 @@ struct MainWindowView: View {
             .disabled(!appModel.exifToolAvailable)
         }
 
-        ToolbarItem(placement: .principal) {
-            tagFilterIndicator
-        }
-
         ToolbarItem {
             HStack(spacing: 6) {
                 Image(systemName: "photo")
@@ -113,6 +118,63 @@ struct MainWindowView: View {
             .popover(isPresented: $showExportPopover) {
                 exportPopoverContent
             }
+        }
+
+        ToolbarItem {
+            Button {
+                showShortcutsHelp = true
+            } label: {
+                Label("ショートカット", systemImage: "keyboard")
+            }
+            .help("キーボードショートカット一覧")
+            .popover(isPresented: $showShortcutsHelp) {
+                shortcutsHelpContent
+            }
+        }
+    }
+
+    // MARK: - ショートカット一覧（画面のどこにも表示が無いとの指摘に対応）
+
+    @ViewBuilder
+    private var shortcutsHelpContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("キーボードショートカット").font(.headline)
+
+            shortcutRow("← → / ↑ ↓", "前後の画像へ移動（プレビュー維持）")
+            Divider()
+            shortcutRow("F", "お気に入り（トグル）")
+            shortcutRow("G", "削除対象としてマーク（トグル）")
+            Divider()
+            Text("カスタムタグ（設定 > キー割当で変更）")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            let customTagRows = appModel.tags
+                .filter { $0.keyBinding.flatMap(Int.init) != nil }
+                .sorted { ($0.keyBinding ?? "") < ($1.keyBinding ?? "") }
+            if customTagRows.isEmpty {
+                Text("未設定だよ")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(customTagRows) { tag in
+                    shortcutRow(tag.keyBinding ?? "", tag.name)
+                }
+            }
+        }
+        .padding()
+        .frame(width: 260)
+    }
+
+    private func shortcutRow(_ key: String, _ description: String) -> some View {
+        HStack(alignment: .top) {
+            Text(key)
+                .font(.caption.monospaced())
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.secondary.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
+            Text(description)
+                .font(.caption)
+            Spacer()
         }
     }
 
@@ -161,28 +223,43 @@ struct MainWindowView: View {
     }
 
     @ViewBuilder
-    private var tagFilterIndicator: some View {
+    private var tagFilterBar: some View {
         if appModel.selectedTagIds.isEmpty {
-            Text("絞り込みなし")
-                .foregroundStyle(.secondary)
-                .font(.caption)
+            HStack {
+                Text("絞り込みなし")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
         } else {
-            HStack(spacing: 4) {
+            FlowLayout(spacing: 6) {
                 ForEach(appModel.tags.filter { appModel.selectedTagIds.contains($0.id) }) { tag in
-                    Text(tag.name)
-                        .font(.caption)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.accentColor.opacity(0.2)))
+                    HStack(spacing: 4) {
+                        Text(tag.name)
+                            .font(.caption)
+                        Button {
+                            appModel.selectedTagIds.remove(tag.id)
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.2)))
                 }
-                Button {
+                Button("すべて解除") {
                     appModel.selectedTagIds.removeAll()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
         }
     }
 
@@ -318,5 +395,48 @@ private struct SidebarView: View {
             groups.append(TagGroup(id: prefix, title: prefix, tags: grouped[prefix] ?? []))
         }
         return groups
+    }
+}
+
+/// タグ絞り込みチップを左寄せで並べ、幅が足りなくなったら折り返す。
+/// 絞り込み条件が増えても横にはみ出さず、縦に伸びて全件表示されるようにするための
+/// 最小限のフローレイアウト（SwiftUIの`Layout`プロトコル、macOS13+で利用可能）。
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var rowWidth: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if rowWidth > 0, rowWidth + spacing + size.width > maxWidth {
+                totalHeight += rowHeight + spacing
+                rowWidth = 0
+                rowHeight = 0
+            }
+            rowWidth += (rowWidth > 0 ? spacing : 0) + size.width
+            rowHeight = max(rowHeight, size.height)
+        }
+        totalHeight += rowHeight
+        return CGSize(width: maxWidth.isFinite ? maxWidth : rowWidth, height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }

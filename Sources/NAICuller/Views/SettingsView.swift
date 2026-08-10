@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import NovelAIViewerCore
+import NAICullerCore
 
 /// 設定ウィンドウ：監視ルートディレクトリの追加/削除、カスタムタグのキー割当（1〜9）（詳細設計 1章）。
 struct SettingsView: View {

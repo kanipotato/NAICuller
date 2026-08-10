@@ -15,7 +15,7 @@ public final class ExifToolProcess {
     private let process: Process
     private let stdinHandle: FileHandle
     private let stdoutHandle: FileHandle
-    private let queue = DispatchQueue(label: "com.kanipotato.NovelAIViewer.ExifToolProcess")
+    private let queue = DispatchQueue(label: "com.kanipotato.NAICuller.ExifToolProcess")
     private var buffer = Data()
     private var isRunning = false
 

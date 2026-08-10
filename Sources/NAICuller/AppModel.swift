@@ -1,17 +1,17 @@
 import Foundation
 import AppKit
-import NovelAIViewerCore
+import NAICullerCore
 
 /// アプリ全体の状態と、Core層サービスへの窓口をまとめる中心的なObservableObject。
 /// SwiftUIビュー群はこれを`@EnvironmentObject`（または直接渡し）で参照する。
 ///
 /// Bundle IDは既存アプリ群（AudioSwitcher/DeskDogs）と同じ`io.github.kanipotato.*`の
-/// 命名規則に揃えて`io.github.kanipotato.novelaiviewer`とした
-/// （詳細設計は`com.kanipotato.NovelAIViewer`を例示していたが「等、一貫性のある命名で良い」
+/// 命名規則に揃えて`io.github.kanipotato.naiculler`とした
+/// （詳細設計は`com.kanipotato.NAICuller`を例示していたが「等、一貫性のある命名で良い」
 /// との指示のため、既存アプリの流儀を優先した）。
 @MainActor
 final class AppModel: ObservableObject {
-    static let bundleIdentifier = "io.github.kanipotato.novelaiviewer"
+    static let bundleIdentifier = "io.github.kanipotato.naiculler"
 
     // MARK: - Core services
 
@@ -370,6 +370,14 @@ final class AppModel: ObservableObject {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(prompt, forType: .string)
         showToast("コピーしました")
+    }
+
+    // MARK: - パスコピー
+
+    func copyPath(of image: ImageRecord) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(image.path, forType: .string)
+        showToast("パスをコピーしました")
     }
 
     // MARK: - エクスポート（4-3章）

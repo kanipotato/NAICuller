@@ -1,5 +1,5 @@
 import XCTest
-@testable import NovelAIViewerCore
+@testable import NAICullerCore
 
 final class ExportServiceTests: XCTestCase {
     private func makeRecord(id: Int64, path: String, prompt: String?) -> ImageRecord {

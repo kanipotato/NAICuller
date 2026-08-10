@@ -1,5 +1,5 @@
 import XCTest
-@testable import NovelAIViewerCore
+@testable import NAICullerCore
 
 final class TagNameValidatorTests: XCTestCase {
     func testEmptyIsRejected() {

@@ -65,7 +65,7 @@ public final class DatabaseService {
     }
 
     private var db: OpaquePointer?
-    private let queue = DispatchQueue(label: "com.kanipotato.NovelAIViewer.DatabaseService")
+    private let queue = DispatchQueue(label: "com.kanipotato.NAICuller.DatabaseService")
     /// `queue`上で実行中かどうかをスレッドローカルに判定するためのキー。
     /// `transaction(_:)`がBEGIN〜COMMITを1回の`sync`で囲えるようにする
     /// （レビュー指摘：BEGIN/body/COMMITを別々の`queue.sync`に分けると、bodyの実行中に

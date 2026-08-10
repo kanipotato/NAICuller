@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
-import NovelAIViewerCore
+import UniformTypeIdentifiers
+import NAICullerCore
 
 /// サムネイルの仮想スクロールグリッド。`NSViewRepresentable`で`NSCollectionView`を包む
 /// （詳細設計 0章：1万枚超は仮想スクロール前提。SwiftUIの`LazyVGrid`ではなくAppKitを直接使う）。
@@ -21,7 +22,8 @@ struct ThumbnailGridView: NSViewRepresentable {
         layout.minimumLineSpacing = 8
         layout.sectionInset = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
 
-        let collectionView = NSCollectionView()
+        let collectionView = ContextMenuCollectionView()
+        collectionView.menuCoordinator = context.coordinator
         collectionView.collectionViewLayout = layout
         collectionView.isSelectable = true
         collectionView.allowsMultipleSelection = true
@@ -110,7 +112,7 @@ struct ThumbnailGridView: NSViewRepresentable {
                         try thumbnailService.generate(imageId: image.id, sourcePath: image.path, size: size)
                     } catch {
                         // 詳細設計 5章：サムネイル生成失敗はログに記録してスキャン/表示自体は継続する。
-                        NSLog("[NovelAIViewer] サムネイル先読み生成に失敗: \(image.path): \(error)")
+                        NSLog("[NAICuller] サムネイル先読み生成に失敗: \(image.path): \(error)")
                     }
                 }
             }
@@ -139,6 +141,76 @@ struct ThumbnailGridView: NSViewRepresentable {
             parent.appModel.selectedImageIds = Set(ids)
         }
 
+        // MARK: - 右クリックメニュー（タグ付け・お気に入り・削除対象・単体エクスポート）
+        //
+        // F/G/1-9キーのトグルも既存タグも「内部的にはすべて同一のタグ機構」（詳細設計1章）なので、
+        // 既存タグ一覧をチェック可能なメニュー項目として並べるだけで、お気に入り・削除対象・
+        // カスタムタグすべてを右クリックからも操作できる（新しいタグ付けロジックは追加していない、
+        // 既存のtoggleTagをそのまま呼ぶだけ）。
+
+        /// クリックされた項目が現在の選択に含まれていなければ単独選択に切り替える（Finder同様の挙動）。
+        func contextMenu(for indexPath: IndexPath) -> NSMenu? {
+            guard indexPath.item < images.count, let collectionView else { return nil }
+            let image = images[indexPath.item]
+            if !collectionView.selectionIndexPaths.contains(indexPath) {
+                collectionView.selectionIndexPaths = [indexPath]
+                syncSelection(collectionView)
+                parent.appModel.focusedImageId = image.id
+            }
+            return buildMenu(for: image)
+        }
+
+        private func buildMenu(for image: ImageRecord) -> NSMenu {
+            let menu = NSMenu()
+            let currentTagIds = parent.appModel.imageTagIds[image.id] ?? []
+
+            // お気に入り(F)・削除対象(G)・1〜9キー割当済みタグを先に、キー順で並べる。
+            let sortedTags = parent.appModel.tags.sorted { lhs, rhs in
+                let lKey = lhs.keyBinding ?? "~"
+                let rKey = rhs.keyBinding ?? "~"
+                return lKey == rKey ? lhs.name < rhs.name : lKey < rKey
+            }
+            for tag in sortedTags {
+                let title = tag.keyBinding.map { "\(tag.name)（\($0)）" } ?? tag.name
+                let item = NSMenuItem(title: title, action: #selector(toggleTagFromMenu(_:)), keyEquivalent: "")
+                item.target = self
+                item.state = currentTagIds.contains(tag.id) ? .on : .off
+                item.representedObject = MenuTagAction(imageId: image.id, tagId: tag.id)
+                menu.addItem(item)
+            }
+            if sortedTags.isEmpty {
+                menu.addItem(NSMenuItem(title: "タグがまだ無いよ", action: nil, keyEquivalent: ""))
+            }
+
+            menu.addItem(.separator())
+            let exportItem = NSMenuItem(title: "この画像をエクスポート...", action: #selector(exportSingleImageFromMenu(_:)), keyEquivalent: "")
+            exportItem.target = self
+            exportItem.representedObject = image.id
+            menu.addItem(exportItem)
+            return menu
+        }
+
+        private struct MenuTagAction {
+            let imageId: Int64
+            let tagId: Int64
+        }
+
+        @objc private func toggleTagFromMenu(_ sender: NSMenuItem) {
+            guard let action = sender.representedObject as? MenuTagAction,
+                  let image = images.first(where: { $0.id == action.imageId }) else { return }
+            parent.appModel.toggleTag(tagId: action.tagId, on: image)
+        }
+
+        @objc private func exportSingleImageFromMenu(_ sender: NSMenuItem) {
+            guard let imageId = sender.representedObject as? Int64,
+                  let image = images.first(where: { $0.id == imageId }) else { return }
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = ExportService.defaultFileName()
+            panel.allowedContentTypes = [.json]
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            parent.appModel.exportImages([image], fields: ExportFieldKind.allCases, to: url)
+        }
+
         // MARK: - サムネイル読み込み（表示直前の遅延生成。詳細設計 0章）
 
         private func loadThumbnail(for image: ImageRecord, into item: ThumbnailItem, indexPath: IndexPath) {
@@ -156,7 +228,7 @@ struct ThumbnailGridView: NSViewRepresentable {
             DispatchQueue.global(qos: .userInitiated).async { [weak self, weak collectionView = self.collectionView] in
                 let data = try? thumbnailService.generate(imageId: imageId, sourcePath: path, size: size)
                 guard let data else {
-                    NSLog("[NovelAIViewer] サムネイル生成に失敗（プレースホルダーのまま表示を継続）: \(path)")
+                    NSLog("[NAICuller] サムネイル生成に失敗（プレースホルダーのまま表示を継続）: \(path)")
                     return
                 }
                 DispatchQueue.main.async {
@@ -176,6 +248,19 @@ struct ThumbnailGridView: NSViewRepresentable {
             image.unlockFocus()
             return image
         }
+    }
+}
+
+/// 右クリックメニュー対応のための`NSCollectionView`サブクラス。`menu(for:)`をオーバーライドして
+/// クリック位置からIndexPathを求め、Coordinatorに動的メニュー構築を委譲する
+/// （`NSCollectionView`には項目ごとのコンテキストメニューを組み立てる標準デリゲートが無いため）。
+private final class ContextMenuCollectionView: NSCollectionView {
+    weak var menuCoordinator: ThumbnailGridView.Coordinator?
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let indexPath = indexPathForItem(at: point) else { return nil }
+        return menuCoordinator?.contextMenu(for: indexPath)
     }
 }
 

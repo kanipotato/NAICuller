@@ -1,5 +1,5 @@
 import XCTest
-@testable import NovelAIViewerCore
+@testable import NAICullerCore
 
 /// 実際にexiftoolをサブプロセスとして起動する結合テスト。
 /// `~/Dev/work/novelAI/tmp/`から実データ検証済みのNovelAI生成PNGをコピーした

@@ -1,5 +1,5 @@
 import XCTest
-@testable import NovelAIViewerCore
+@testable import NAICullerCore
 
 /// 実プロセスを起動しないフェイクExifTool実装。呼び出し回数を記録できるので、
 /// 「mtime/file_sizeが変わっていないファイルはExifToolを再読み込みしない」ことを検証できる。

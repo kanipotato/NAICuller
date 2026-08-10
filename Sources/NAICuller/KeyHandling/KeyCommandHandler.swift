@@ -1,5 +1,5 @@
 import AppKit
-import NovelAIViewerCore
+import NAICullerCore
 
 /// キーボード操作（矢印/F/G/1〜9）をアプリ全体で受け付けるハンドラ（詳細設計 1章）。
 ///

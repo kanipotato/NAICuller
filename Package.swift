@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "NovelAIViewer",
+    name: "NAICuller",
     platforms: [
         .macOS(.v13)
     ],
@@ -13,22 +13,22 @@ let package = Package(
         // SQLiteはGRDB/SQLite.swift等の外部依存を追加せず、システム標準のlibsqlite3を
         // `import SQLite3`で直接使う（Package.swiftへの追加設定は不要）。
         .target(
-            name: "NovelAIViewerCore",
-            path: "Sources/NovelAIViewerCore"
+            name: "NAICullerCore",
+            path: "Sources/NAICullerCore"
         ),
         // 実行ファイル本体。SwiftUIをベースに、性能が必要なサムネイルグリッドだけ
         // NSViewRepresentableでNSCollectionViewを包む。
         .executableTarget(
-            name: "NovelAIViewer",
-            dependencies: ["NovelAIViewerCore"],
-            path: "Sources/NovelAIViewer"
+            name: "NAICuller",
+            dependencies: ["NAICullerCore"],
+            path: "Sources/NAICuller"
         ),
         // ExifToolServiceTestsは実際にサブプロセスとしてexiftoolを起動する結合テストのため、
         // テスト用リソース（NovelAI生成PNGの実ファイル2〜3枚）をFixtures/に同梱する。
         .testTarget(
-            name: "NovelAIViewerCoreTests",
-            dependencies: ["NovelAIViewerCore"],
-            path: "Tests/NovelAIViewerCoreTests",
+            name: "NAICullerCoreTests",
+            dependencies: ["NAICullerCore"],
+            path: "Tests/NAICullerCoreTests",
             resources: [
                 .copy("Fixtures")
             ]

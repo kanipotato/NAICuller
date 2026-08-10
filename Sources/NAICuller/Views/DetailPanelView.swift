@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import NovelAIViewerCore
+import NAICullerCore
 
 /// 右パネル：プレビュー・タグ情報・システム情報・プロンプトの4グループ構成（詳細設計 1章）。
 /// 生成AI管理特化ツールのような細かいEXIF風メタデータ一覧は意図的に採用せず、荒めの出力に留める。
@@ -19,28 +19,36 @@ struct DetailPanelView: View {
     }
 
     var body: some View {
-        ScrollView {
-            if let image = focusedImage {
-                VStack(alignment: .leading, spacing: 16) {
-                    previewSection(image)
-                    Divider()
-                    tagSection(image)
-                    Divider()
-                    systemInfoSection(image)
-                    Divider()
-                    promptSection(image)
+        if let image = focusedImage {
+            // プレビューはScrollViewの外に固定表示する（末端まで送った後の弾性スクロールで
+            // 提案される高さがフレームごとに微妙に変動し、aspectRatio(.fit)の再計算が連鎖して
+            // プレビューが拡大縮小を繰り返す(ガタつく)不具合があったため。ScrollViewの中に
+            // 置いたままだと画像の高さがスクロールの揺れに依存してしまう構造そのものが原因なので、
+            // 揺れの入力を受けない場所に出すことで根本的に断つ）。
+            VStack(alignment: .leading, spacing: 0) {
+                previewSection(image)
+                    .padding()
+                Divider()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        tagSection(image)
+                        Divider()
+                        systemInfoSection(image)
+                        Divider()
+                        promptSection(image)
+                    }
+                    .padding()
                 }
-                .padding()
-                .id(image.id)
-            } else {
-                VStack {
-                    Spacer(minLength: 60)
-                    Text("画像を選択してね")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
             }
+            .id(image.id)
+        } else {
+            VStack {
+                Spacer(minLength: 60)
+                Text("画像を選択してね")
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -53,6 +61,9 @@ struct DetailPanelView: View {
                 Image(nsImage: previewImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
+                    // ScrollView外の固定表示なので、この上限(仮置き480pt)は純粋に
+                    // 「縦長画像でパネルを占領しすぎない」ための安全弁。
+                    .frame(maxWidth: .infinity, maxHeight: 480)
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, minHeight: 180)
@@ -196,7 +207,7 @@ struct DetailPanelView: View {
     private func systemInfoSection(_ image: ImageRecord) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("システム情報").font(.headline)
-            infoRow("パス", image.path)
+            infoRow("パス", image.path) { appModel.copyPath(of: image) }
             if let width = image.width, let height = image.height {
                 infoRow("サイズ", "\(width) × \(height)")
             }
@@ -208,10 +219,20 @@ struct DetailPanelView: View {
         }
     }
 
-    private func infoRow(_ label: String, _ value: String) -> some View {
+    private func infoRow(_ label: String, _ value: String, copyAction: (() -> Void)? = nil) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(label).font(.caption2).foregroundStyle(.secondary)
-            Text(value).font(.caption).textSelection(.enabled)
+            HStack(spacing: 4) {
+                Text(value).font(.caption).textSelection(.enabled)
+                if let copyAction {
+                    Button(action: copyAction) {
+                        Image(systemName: "doc.on.doc")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.plain)
+                    .help("パスをコピー")
+                }
+            }
         }
     }
 
