@@ -54,6 +54,11 @@ final class KeyCommandHandler {
         case KeyCode.rightArrow, KeyCode.downArrow:
             moveFocus(by: 1, appModel: appModel)
             return true
+        case KeyCode.space:
+            // Finderと同じ操作感（スペースキーでQuick Look）。実際に使ってみてのフィードバックで、
+            // 画像を大きく見る手段が他アプリで開く以外に無かったため追加した。
+            appModel.quickLookController.toggle()
+            return true
         default:
             break
         }
@@ -110,5 +115,6 @@ final class KeyCommandHandler {
         static let rightArrow: UInt16 = 124
         static let downArrow: UInt16 = 125
         static let upArrow: UInt16 = 126
+        static let space: UInt16 = 49
     }
 }

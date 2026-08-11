@@ -20,6 +20,7 @@ final class AppModel: ObservableObject {
     private(set) var tagRepository: TagRepository!
     private(set) var thumbnailService: ThumbnailService!
     private(set) var exportService = ExportService()
+    private(set) var quickLookController: QuickLookController!
     private var exifToolService: ExifToolService?
     private var scanService: ScanService?
 
@@ -54,6 +55,19 @@ final class AppModel: ObservableObject {
     @Published var sortOrder: ImageSortOrder = .dateNewest {
         didSet { refreshFilteredImages() }
     }
+    /// タグが1つも付いていない画像だけを表示する（実際に使ってみてのフィードバックで追加。
+    /// タグ付け済みのものはタグ絞り込みで見つけられるが、その裏返し＝「まだ手を付けていない
+    /// もの」を残すためのフィルタが無かった）。ONにした瞬間、タグ絞り込みと同時に使うと
+    /// 意味が食い違う（両方ONだと必ず0件になる）ため、選択中のタグ絞り込みは自動で解除する。
+    @Published var showUntaggedOnly: Bool = false {
+        didSet {
+            if showUntaggedOnly, !selectedTagIds.isEmpty {
+                selectedTagIds.removeAll() // didSetの中でrefreshFilteredImages()が呼ばれる
+            } else {
+                refreshFilteredImages()
+            }
+        }
+    }
     @Published var selectedImageIds: Set<Int64> = []
     @Published var focusedImageId: Int64?
     @Published var thumbnailSize: ThumbnailSize = .medium
@@ -86,6 +100,7 @@ final class AppModel: ObservableObject {
         setUpDatabaseAndThumbnailCache()
         recheckExifTool()
         reloadAll()
+        quickLookController = QuickLookController(appModel: self)
     }
 
     private func setUpDatabaseAndThumbnailCache() {
@@ -174,7 +189,9 @@ final class AppModel: ObservableObject {
     private func refreshFilteredImages() {
         let narrowed = images.filter { image in
             guard enabledRootIds.contains(image.rootId) else { return false }
-            if !selectedTagIds.isEmpty {
+            if showUntaggedOnly {
+                guard (imageTagIds[image.id] ?? []).isEmpty else { return false }
+            } else if !selectedTagIds.isEmpty {
                 guard let tagIds = imageTagIds[image.id], selectedTagIds.isSubset(of: tagIds) else { return false }
             }
             if !promptSearchText.isEmpty {

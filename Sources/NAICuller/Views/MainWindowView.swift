@@ -143,6 +143,18 @@ struct MainWindowView: View {
             }
         }
 
+        // フォーカス中の画像をQuick Lookで大きく表示（実際に使ってみてのフィードバックで追加。
+        // 他アプリで開く以外に大きく見る手段が無かった）。スペースキーでも同じ操作ができる。
+        ToolbarItem {
+            Button {
+                appModel.quickLookController.toggle()
+            } label: {
+                Label("大きく表示", systemImage: "arrow.up.left.and.arrow.down.right")
+            }
+            .disabled(appModel.focusedImageId == nil)
+            .help("フォーカス中の画像をQuick Lookで大きく表示（スペースキーでも可）")
+        }
+
         ToolbarItem {
             Button {
                 showShortcutsHelp = true
@@ -188,6 +200,7 @@ struct MainWindowView: View {
             Text("キーボードショートカット").font(.headline)
 
             shortcutRow("← → / ↑ ↓", "前後の画像へ移動（プレビュー維持）")
+            shortcutRow("Space", "フォーカス中の画像をQuick Lookで大きく表示")
             Divider()
             shortcutRow("F", "お気に入り（トグル）")
             shortcutRow("G", "削除対象としてマーク（トグル）")
@@ -271,9 +284,19 @@ struct MainWindowView: View {
 
     private var tagFilterBar: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // タグを付ける前の画像は当然まだタグで絞り込めないので、その手前の絞り込み手段として
-            // プロンプト本文の部分一致検索を用意した（タグ付け作業の入り口）。
-            promptSearchField
+            HStack(spacing: 8) {
+                // タグを付ける前の画像は当然まだタグで絞り込めないので、その手前の絞り込み手段として
+                // プロンプト本文の部分一致検索を用意した（タグ付け作業の入り口）。
+                promptSearchField
+                // タグ絞り込みでは「付いているもの」しか探せなかったので、その裏返し
+                // （まだ手を付けていないもの）を残すためのトグルを追加した。
+                Toggle(isOn: $appModel.showUntaggedOnly) {
+                    Text("未タグのみ")
+                        .font(.caption)
+                }
+                .toggleStyle(.button)
+                .controlSize(.small)
+            }
             tagChipsRow
         }
         .padding(.horizontal, 10)
@@ -306,7 +329,14 @@ struct MainWindowView: View {
 
     @ViewBuilder
     private var tagChipsRow: some View {
-        if appModel.selectedTagIds.isEmpty {
+        if appModel.showUntaggedOnly {
+            HStack {
+                Text("未タグの画像のみ表示中")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+                Spacer(minLength: 0)
+            }
+        } else if appModel.selectedTagIds.isEmpty {
             HStack {
                 Text("タグ絞り込みなし")
                     .foregroundStyle(.secondary)

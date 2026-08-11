@@ -60,12 +60,23 @@ struct ThumbnailGridView: NSViewRepresentable {
             coordinator.images = newImages
         }
 
-        let desiredIndexPaths = Set(appModel.selectedImageIds.compactMap { id -> IndexPath? in
-            guard let index = newImages.firstIndex(where: { $0.id == id }) else { return nil }
-            return IndexPath(item: index, section: 0)
-        })
-        if collectionView.selectionIndexPaths != desiredIndexPaths {
-            collectionView.selectionIndexPaths = desiredIndexPaths
+        // Coordinator側(AppKit発)がappModelへ選択を書き込んだ直後の折り返しのupdateNSViewでは、
+        // ここでの再代入をスキップする（Shift+クリックの範囲選択が効かない不具合の修正）。
+        // NSCollectionViewは複数選択の際、range選択の「起点」を内部的に保持しているが、
+        // didSelectItemsAt経由でappModel.selectedImageIdsを更新→SwiftUIがそれを検知して
+        // updateNSViewを呼び直す→ここでselectionIndexPathsに（今の内容と同じでも）再代入する、
+        // という往復が同じイベント処理の流れの中で起こると、AppKit側の内部状態（起点）が
+        // 途中でリセットされ、次のShift+クリックが単発クリックとして扱われてしまっていた。
+        if coordinator.suppressNextSelectionSync {
+            coordinator.suppressNextSelectionSync = false
+        } else {
+            let desiredIndexPaths = Set(appModel.selectedImageIds.compactMap { id -> IndexPath? in
+                guard let index = newImages.firstIndex(where: { $0.id == id }) else { return nil }
+                return IndexPath(item: index, section: 0)
+            })
+            if collectionView.selectionIndexPaths != desiredIndexPaths {
+                collectionView.selectionIndexPaths = desiredIndexPaths
+            }
         }
     }
 
@@ -77,6 +88,10 @@ struct ThumbnailGridView: NSViewRepresentable {
         var parent: ThumbnailGridView
         weak var collectionView: NSCollectionView?
         var images: [ImageRecord] = []
+        /// `syncSelection`でappModelへ書き込んだ直後、その変化を検知して呼ばれる次の
+        /// `updateNSView`が選択をappModel側から再代入しないようにするフラグ（Shift+クリックの
+        /// 範囲選択が壊れる不具合の修正）。
+        var suppressNextSelectionSync = false
         private static let placeholder = Coordinator.makePlaceholderImage()
 
         init(_ parent: ThumbnailGridView) {
@@ -138,6 +153,7 @@ struct ThumbnailGridView: NSViewRepresentable {
 
         private func syncSelection(_ collectionView: NSCollectionView) {
             let ids = collectionView.selectionIndexPaths.compactMap { $0.item < images.count ? images[$0.item].id : nil }
+            suppressNextSelectionSync = true
             parent.appModel.selectedImageIds = Set(ids)
         }
 
@@ -167,6 +183,14 @@ struct ThumbnailGridView: NSViewRepresentable {
         private func buildMenu(for targets: [ImageRecord]) -> NSMenu {
             let menu = NSMenu()
             let appModel = parent.appModel
+
+            // Quick Lookはフォーカス中の1枚だけを表示する仕組みなので、複数選択時は出さない。
+            if targets.count == 1 {
+                let quickLookItem = NSMenuItem(title: "大きく表示（Quick Look）", action: #selector(showQuickLookFromMenu(_:)), keyEquivalent: "")
+                quickLookItem.target = self
+                menu.addItem(quickLookItem)
+                menu.addItem(.separator())
+            }
 
             // お気に入り(F)・削除対象(G)・1〜9キー割当済みタグを先に、キー順で並べる。
             let sortedTags = appModel.tags.sorted { lhs, rhs in
@@ -200,6 +224,12 @@ struct ThumbnailGridView: NSViewRepresentable {
         private struct MenuTagAction {
             let imageIds: [Int64]
             let tagId: Int64
+        }
+
+        @objc private func showQuickLookFromMenu(_ sender: NSMenuItem) {
+            // contextMenu(for:)側で右クリック時点のfocusedImageIdは既に更新済みなので、
+            // ここではトグルを呼ぶだけでよい。
+            parent.appModel.quickLookController.toggle()
         }
 
         @objc private func toggleTagFromMenu(_ sender: NSMenuItem) {
