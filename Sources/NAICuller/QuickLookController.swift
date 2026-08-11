@@ -22,9 +22,18 @@ final class QuickLookController: NSObject {
         self.appModel = appModel
         super.init()
         // パネルを開いたまま矢印キーやクリックで選択を変えたときに表示を追従させる。
-        focusedImageCancellable = appModel.$focusedImageId.sink { _ in
+        // コードレビュー指摘の修正：削除（ゴミ箱移動）やフィルタ変更で表示中の画像が
+        // 見えなくなった場合、`focusedImageId`はnilに変わる（AppModel.refreshFilteredImages()
+        // 側の修正）ので、ここでも「表示すべき画像が無くなった」ことを検知してパネル自体を
+        // 閉じる。以前はreloadData()するだけで、対象0件のときパネルが空のまま/古い内容の
+        // まま開き続くことがあった。
+        focusedImageCancellable = appModel.$focusedImageId.sink { newValue in
             guard let panel = QLPreviewPanel.shared(), panel.isVisible else { return }
-            panel.reloadData()
+            if newValue == nil {
+                panel.orderOut(nil)
+            } else {
+                panel.reloadData()
+            }
         }
     }
 

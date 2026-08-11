@@ -40,7 +40,18 @@ final class AppModel: ObservableObject {
     @Published private(set) var filteredImages: [ImageRecord] = []
 
     @Published var selectedTagIds: Set<Int64> = [] {
-        didSet { refreshFilteredImages() }
+        didSet {
+            // showUntaggedOnlyとの排他はこれまで片方向（showUntaggedOnly→selectedTagIds解除）
+            // だけだった。サイドバーのタグクリックはselectedTagIdsを直接書き換えるため、
+            // 「未タグのみ」表示中にタグをクリックすると絞り込みの実体（showUntaggedOnly）と
+            // 見た目（選択済み表示のタグ・チップ表示）が食い違うコードレビュー指摘があった。
+            // 双方向にすることで、どちらから変更してもお互いを正しく解除し合うようにする。
+            if !selectedTagIds.isEmpty, showUntaggedOnly {
+                showUntaggedOnly = false // didSetの中でrefreshFilteredImages()が呼ばれる
+            } else {
+                refreshFilteredImages()
+            }
+        }
     }
     /// サイドバーのルートチェックボックスで有効化されているルート（未チェックのルート配下の画像は
     /// グリッドから一時的に除外する。DBからは削除しない表示フィルタ）。
@@ -49,8 +60,19 @@ final class AppModel: ObservableObject {
     }
     /// プロンプト本文に対する部分一致検索（大文字小文字は区別しない）。空文字なら絞り込まない。
     /// タグを付ける前の画像を「プロンプトの内容」で見つけるための入り口として追加した。
+    ///
+    /// コードレビュー指摘の修正：以前はキー入力のたびに同期で`refreshFilteredImages()`を
+    /// 呼んでおり、1万枚超のライブラリでは1文字打つごとに全件フィルタ＋再ソートが走って
+    /// 入力がもたついていた。200ms のデバウンスを挟み、入力が止まってから1回だけ実行する。
     @Published var promptSearchText: String = "" {
-        didSet { refreshFilteredImages() }
+        didSet {
+            searchDebounceTask?.cancel()
+            searchDebounceTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard !Task.isCancelled else { return }
+                await MainActor.run { self?.refreshFilteredImages() }
+            }
+        }
     }
     @Published var sortOrder: ImageSortOrder = .dateNewest {
         didSet { refreshFilteredImages() }
@@ -88,6 +110,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var pendingDeletionCount: Int = 0
 
     private var toastDismissTask: Task<Void, Never>?
+    private var searchDebounceTask: Task<Void, Never>?
     /// `toggleTag`が非同期（ExifTool書き込み待ち）の間、同じ(画像, タグ)への二重トグルを
     /// 防ぐための進行中セット（レビュー指摘の修正：キーリピート等で同じキーが連打されると、
     /// 1回目の完了を待たずに2回目が同じ`currentlyTagged`スナップショットを読んでしまい、
@@ -176,11 +199,15 @@ final class AppModel: ObservableObject {
 
     func reloadImages() {
         images = (try? imageRepository.fetchImages()) ?? []
-        var mapping: [Int64: Set<Int64>] = [:]
-        for image in images {
-            mapping[image.id] = (try? tagRepository.tagIds(forImage: image.id)) ?? []
+        // コードレビュー指摘の修正：以前は画像1件ごとに`tagIds(forImage:)`を呼んでおり、
+        // 1万枚超の実ライブラリでは`reloadImages()`が呼ばれるたびに1万回超のSQLite
+        // 問い合わせが発生していた（一括タグ付け・ゴミ箱移動の追加でreloadImages()の
+        // 呼び出し頻度自体も増えたため、より顕在化しやすくなっていた）。1回のSELECTで
+        // 全画像分をまとめて取得する`allImageTagIds()`に置き換える。
+        let allTagIds = (try? tagRepository.allImageTagIds()) ?? [:]
+        imageTagIds = images.reduce(into: [Int64: Set<Int64>]()) { mapping, image in
+            mapping[image.id] = allTagIds[image.id] ?? []
         }
-        imageTagIds = mapping
         refreshFilteredImages()
     }
 
@@ -201,6 +228,17 @@ final class AppModel: ObservableObject {
             return true
         }
         filteredImages = sortOrder.sorted(narrowed)
+
+        // コードレビュー指摘の修正：フィルタで画面から消えた画像のIDが`selectedImageIds`に
+        // 残り続けていた（グリッド側の見た目の選択解除はNSCollectionView側でしか反映されず、
+        // appModel.selectedImageIds自体は素通りだった）。「ゴミ箱移動」機能は
+        // `selectedImageIds`をそのまま対象にするため、見えなくなった画像が紛れ込んだまま
+        // 削除されてしまう実害があった。ここで常に見えている画像のIDだけに絞り込む。
+        let visibleIds = Set(filteredImages.map(\.id))
+        selectedImageIds.formIntersection(visibleIds)
+        if let focusedImageId, !visibleIds.contains(focusedImageId) {
+            self.focusedImageId = nil
+        }
     }
 
     // MARK: - ルート管理
@@ -343,8 +381,13 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.recycle(urls) { [weak self] newURLs, error in
             DispatchQueue.main.async {
                 guard let self else { return }
-                let succeededPaths = Set(newURLs.keys.map(\.path))
-                let succeededTargets = targets.filter { succeededPaths.contains($0.path) }
+                // コードレビュー指摘の修正：`newURLs`のキー（渡した元URL）と`targets`側のURLは
+                // 意味的に同じファイルでも、シンボリックリンク解決や表記の正規化により
+                // パス文字列がそのままでは一致しないことがある。`standardizedFileURL`で
+                // 両側を正規化してから比較し、実際に成功したのに「失敗」と誤判定して
+                // DBレコードが消し忘れられる（ゴミ箱の実体とDBがずれる）事故を防ぐ。
+                let succeededPaths = Set(newURLs.keys.map { $0.standardizedFileURL.path })
+                let succeededTargets = targets.filter { succeededPaths.contains($0.url.standardizedFileURL.path) }
                 let failedCount = targets.count - succeededTargets.count
                 if !succeededTargets.isEmpty {
                     do {
@@ -476,9 +519,13 @@ final class AppModel: ObservableObject {
             // varのまま`Task.detached`と`MainActor.run`の2つのクロージャに跨って参照/mutateすると
             // Swift 6の厳格な並行性チェックで警告（将来的にはエラー）になるため、`let`に固定してから渡す。
             let succeededIds = writeSucceeded
-            let failedCount = writeFailed.count
+            let writeFailedNames = writeFailed
             await MainActor.run {
-                var dbFailedCount = 0
+                // コードレビュー指摘の修正：以前は成功/失敗の件数しか出さず、単体版
+                // （`toggleTag(tagId:on:ImageRecord)`）と違ってどのファイルがなぜ失敗したか
+                // 分からなかった。ファイル名を集約し、失敗があるときは（単体版と同じ重み付けで）
+                // トーストではなくモーダルアラートで出す。
+                var dbFailedNames: [String] = []
                 for imageId in succeededIds {
                     do {
                         if shouldAdd {
@@ -487,18 +534,25 @@ final class AppModel: ObservableObject {
                             try self.tagRepository.removeTagFromImage(imageId: imageId, tagId: tagId)
                         }
                     } catch {
-                        dbFailedCount += 1
+                        if let name = targets.first(where: { $0.id == imageId })?.url.lastPathComponent {
+                            dbFailedNames.append(name)
+                        }
                     }
                 }
                 self.reloadTags()
                 self.reloadImages()
                 self.inFlightToggles.subtract(keys)
-                let updatedCount = succeededIds.count - dbFailedCount
-                let totalFailedCount = failedCount + dbFailedCount
-                if totalFailedCount == 0 {
+                let allFailedNames = writeFailedNames + dbFailedNames
+                let updatedCount = succeededIds.count - dbFailedNames.count
+                if allFailedNames.isEmpty {
                     self.showToast("\(updatedCount)件のタグを更新したよ")
                 } else {
-                    self.showToast("\(updatedCount)件成功・\(totalFailedCount)件失敗")
+                    let shown = allFailedNames.prefix(5).joined(separator: "、")
+                    let rest = allFailedNames.count > 5 ? "、他\(allFailedNames.count - 5)件" : ""
+                    self.presentAlert(
+                        message: "一部のタグ付けに失敗した",
+                        informative: "\(updatedCount)件成功。失敗: \(shown)\(rest)"
+                    )
                 }
             }
         }

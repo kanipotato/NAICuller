@@ -127,4 +127,18 @@ public final class TagRepository {
         ) { row in (row.int64(0), row.int(1)) }
         return Dictionary(uniqueKeysWithValues: rows)
     }
+
+    /// 全画像分のタグID集合をimage_tagsテーブル1回のSELECTでまとめて取得する
+    /// （コードレビュー指摘：`tagIds(forImage:)`を画像1件ずつループで呼ぶN+1クエリの解消用。
+    /// `reloadImages()`はこれまで画像枚数と同じ回数SQLiteへ問い合わせていた）。
+    public func allImageTagIds() throws -> [Int64: Set<Int64>] {
+        let rows = try db.query(
+            "SELECT image_id, tag_id FROM image_tags;"
+        ) { row in (row.int64(0), row.int64(1)) }
+        var mapping: [Int64: Set<Int64>] = [:]
+        for (imageId, tagId) in rows {
+            mapping[imageId, default: []].insert(tagId)
+        }
+        return mapping
+    }
 }

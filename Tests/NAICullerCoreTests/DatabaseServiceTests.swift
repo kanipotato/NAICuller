@@ -119,6 +119,30 @@ final class DatabaseServiceTests: XCTestCase {
         XCTAssertTrue(try tagRepo.tagIds(forImage: imageId).isEmpty)
     }
 
+    /// コードレビュー指摘の回帰テスト：`allImageTagIds()`が`tagIds(forImage:)`を画像ごとに
+    /// 呼ぶN+1クエリの代わりに、1回のSELECTで全画像分のタグID集合を正しく組み立てられること。
+    func testAllImageTagIdsBatchesAcrossImages() throws {
+        let db = try DatabaseService(path: ":memory:")
+        let imageRepo = ImageRepository(db: db)
+        let tagRepo = TagRepository(db: db)
+        let rootId = try imageRepo.insertRoot(path: "/tmp/root1")
+        let image1 = try imageRepo.insertImage(rootId: rootId, path: "/tmp/root1/a.png", mtime: 1, fileSize: 1, width: nil, height: nil, promptCache: nil)
+        let image2 = try imageRepo.insertImage(rootId: rootId, path: "/tmp/root1/b.png", mtime: 1, fileSize: 1, width: nil, height: nil, promptCache: nil)
+        let image3 = try imageRepo.insertImage(rootId: rootId, path: "/tmp/root1/c.png", mtime: 1, fileSize: 1, width: nil, height: nil, promptCache: nil)
+        let favorite = try tagRepo.fetchByKeyBinding("F")!
+        let deletion = try tagRepo.fetchByKeyBinding("G")!
+
+        try tagRepo.addTagToImage(imageId: image1, tagId: favorite.id)
+        try tagRepo.addTagToImage(imageId: image1, tagId: deletion.id)
+        try tagRepo.addTagToImage(imageId: image2, tagId: deletion.id)
+        // image3にはタグを付けない（マッピングにキー自体が存在しないことを確認するため）。
+
+        let mapping = try tagRepo.allImageTagIds()
+        XCTAssertEqual(mapping[image1], [favorite.id, deletion.id])
+        XCTAssertEqual(mapping[image2], [deletion.id])
+        XCTAssertNil(mapping[image3])
+    }
+
     /// レビュー指摘の回帰テスト：`transaction`の中で複数回`run`/`query`を呼んでも
     /// デッドロックしないこと（以前はBEGIN/body/COMMITが別々の`queue.sync`だったため、
     /// 直しかたを誤ると同一スレッドからのネスト`sync`でハングする）。

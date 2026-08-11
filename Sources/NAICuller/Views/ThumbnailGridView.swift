@@ -199,7 +199,17 @@ struct ThumbnailGridView: NSViewRepresentable {
 
             collectionView.selectionIndexPaths = newSelection
             syncSelection(collectionView)
-            parent.appModel.focusedImageId = clickedId
+            // コードレビュー指摘の修正：Cmd+クリックでクリックした項目自体を選択解除した場合に
+            // それでも`focusedImageId`をクリック項目のままにしていたため、見えなくなった
+            // （非選択状態の）画像にF/Gキーのタグ付けが効いてしまうバグがあった。
+            // 選択解除された場合は、残っている選択の先頭（無ければnil）にフォーカスを譲る。
+            if newSelection.contains(indexPath) {
+                parent.appModel.focusedImageId = clickedId
+            } else if let firstRemaining = newSelection.map(\.item).sorted().first, firstRemaining < images.count {
+                parent.appModel.focusedImageId = images[firstRemaining].id
+            } else {
+                parent.appModel.focusedImageId = nil
+            }
             return true
         }
 
@@ -217,9 +227,12 @@ struct ThumbnailGridView: NSViewRepresentable {
             guard indexPath.item < images.count, let collectionView else { return nil }
             let clickedImage = images[indexPath.item]
             if !collectionView.selectionIndexPaths.contains(indexPath) {
-                collectionView.selectionIndexPaths = [indexPath]
-                syncSelection(collectionView)
-                parent.appModel.focusedImageId = clickedImage.id
+                // コードレビュー指摘の修正：以前はここで選択の切り替えだけを独自に行っており、
+                // `handleClick`が更新する`selectionAnchorId`（Shift+クリックの起点）が
+                // 素通りされていた。右クリックで単独選択に切り替えた直後にShift+クリックすると、
+                // 今right-clickした項目ではなく古い起点から範囲選択されてしまう不具合があった。
+                // 無修飾クリックと同じ経路（`handleClick`）に一本化して起点も正しく更新する。
+                handleClick(at: indexPath, modifiers: [])
             }
             let selectedIds = parent.appModel.selectedImageIds
             let targets = selectedIds.count > 1 ? images.filter { selectedIds.contains($0.id) } : [clickedImage]
