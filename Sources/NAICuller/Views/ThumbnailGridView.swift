@@ -92,6 +92,10 @@ struct ThumbnailGridView: NSViewRepresentable {
         /// `updateNSView`が選択をappModel側から再代入しないようにするフラグ（Shift+クリックの
         /// 範囲選択が壊れる不具合の修正）。
         var suppressNextSelectionSync = false
+        /// Shift+クリックで範囲選択する際の起点（画像ID）。Finderと同じく、Shiftを押さない
+        /// 通常クリック・Cmd+クリックのたびに更新し、以降のShift+クリックは常にこの起点からの
+        /// 範囲になる。IndexPathではなくIDで持つ理由はhandleClick内のコメント参照。
+        private var selectionAnchorId: Int64?
         private static let placeholder = Coordinator.makePlaceholderImage()
 
         init(_ parent: ThumbnailGridView) {
@@ -155,6 +159,48 @@ struct ThumbnailGridView: NSViewRepresentable {
             let ids = collectionView.selectionIndexPaths.compactMap { $0.item < images.count ? images[$0.item].id : nil }
             suppressNextSelectionSync = true
             parent.appModel.selectedImageIds = Set(ids)
+        }
+
+        // MARK: - クリック選択（Finder同様の無修飾/Cmd/Shiftの3規則。`ContextMenuCollectionView`から呼ばれる）
+
+        /// `collectionView.selectionIndexPaths`への代入は`didSelectItemsAt`等のデリゲート通知を
+        /// 発生させない仕様のため、ここで選択の計算・反映・appModelへの同期まで全て行う。
+        ///
+        /// 起点は`IndexPath`（配列上の位置）ではなく画像IDで持ち、Shift+クリックのたびに
+        /// `images`配列内での現在位置を引き直して範囲を計算する。ソート順を変更すると
+        /// 同じ画像でも配列内の位置がずれるため、位置をそのまま起点にすると選択後に
+        /// ソート順を変えたときに全く無関係な範囲を選んでしまう（実際に使ってみての
+        /// フィードバックを受けて検証し、位置ベースからID解決ベースに変更した）。
+        @discardableResult
+        func handleClick(at indexPath: IndexPath, modifiers: NSEvent.ModifierFlags) -> Bool {
+            guard let collectionView, indexPath.item < images.count else { return false }
+            let clickedId = images[indexPath.item].id
+
+            var newSelection: Set<IndexPath>
+            if modifiers.contains(.shift),
+               let anchorId = selectionAnchorId,
+               let anchorIndex = images.firstIndex(where: { $0.id == anchorId }) {
+                let lower = min(anchorIndex, indexPath.item)
+                let upper = max(anchorIndex, indexPath.item)
+                newSelection = Set((lower...upper).map { IndexPath(item: $0, section: 0) })
+                // 起点は動かさない：連続してShift+クリックしても常に同じ起点からの範囲になる。
+            } else if modifiers.contains(.command) {
+                newSelection = collectionView.selectionIndexPaths
+                if newSelection.contains(indexPath) {
+                    newSelection.remove(indexPath)
+                } else {
+                    newSelection.insert(indexPath)
+                }
+                selectionAnchorId = clickedId
+            } else {
+                newSelection = [indexPath]
+                selectionAnchorId = clickedId
+            }
+
+            collectionView.selectionIndexPaths = newSelection
+            syncSelection(collectionView)
+            parent.appModel.focusedImageId = clickedId
+            return true
         }
 
         // MARK: - 右クリックメニュー（タグ付け・お気に入り・削除対象・エクスポート）
@@ -293,6 +339,14 @@ struct ThumbnailGridView: NSViewRepresentable {
 /// 右クリックメニュー対応のための`NSCollectionView`サブクラス。`menu(for:)`をオーバーライドして
 /// クリック位置からIndexPathを求め、Coordinatorに動的メニュー構築を委譲する
 /// （`NSCollectionView`には項目ごとのコンテキストメニューを組み立てる標準デリゲートが無いため）。
+/// 右クリックメニューと、Finder同様の選択規則（無修飾クリック=単独選択・Cmd+クリック=トグル・
+/// Shift+クリック=範囲選択）に対応するための`NSCollectionView`サブクラス。
+///
+/// `NSCollectionView`は`allowsMultipleSelection`を有効にしてもCmd+クリックのトグルにしか
+/// 標準対応しておらず、Shift+クリックによる範囲選択は自前実装が必要（`NSTableView`と違い
+/// 既定の`mouseDown`処理には範囲選択のロジックが含まれていない、既知の制限）。そのため
+/// `mouseDown`自体を乗っ取り、クリックされた項目と修飾キーからCoordinatorに選択計算を
+/// 委譲する。
 private final class ContextMenuCollectionView: NSCollectionView {
     weak var menuCoordinator: ThumbnailGridView.Coordinator?
 
@@ -300,6 +354,18 @@ private final class ContextMenuCollectionView: NSCollectionView {
         let point = convert(event.locationInWindow, from: nil)
         guard let indexPath = indexPathForItem(at: point) else { return nil }
         return menuCoordinator?.contextMenu(for: indexPath)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let indexPath = indexPathForItem(at: point),
+              menuCoordinator?.handleClick(at: indexPath, modifiers: event.modifierFlags) == true else {
+            // 項目の無い領域（余白）のクリックは既定の挙動（全選択解除・ラバーバンド選択）に任せる。
+            super.mouseDown(with: event)
+            return
+        }
+        // 既定のmouseDownを呼ばない分、ファーストレスポンダへの昇格は自分で行う。
+        window?.makeFirstResponder(self)
     }
 }
 
