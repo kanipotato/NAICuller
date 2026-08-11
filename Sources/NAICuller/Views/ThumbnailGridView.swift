@@ -243,11 +243,19 @@ struct ThumbnailGridView: NSViewRepresentable {
             let menu = NSMenu()
             let appModel = parent.appModel
 
-            // Quick Lookはフォーカス中の1枚だけを表示する仕組みなので、複数選択時は出さない。
+            // Quick Look・固定表示はどちらも1枚を表示する仕組みなので、複数選択時は出さない。
             if targets.count == 1 {
                 let quickLookItem = NSMenuItem(title: "大きく表示（Quick Look）", action: #selector(showQuickLookFromMenu(_:)), keyEquivalent: "")
                 quickLookItem.target = self
                 menu.addItem(quickLookItem)
+
+                // 選択に追従するQuick Lookと違い、比較用にこの1枚を選択に連動させず
+                // 別ウィンドウで開いたままにしておきたいという要望から追加。
+                let pinnedItem = NSMenuItem(title: "この画像を固定表示", action: #selector(showPinnedPreviewFromMenu(_:)), keyEquivalent: "")
+                pinnedItem.target = self
+                pinnedItem.representedObject = targets[0].id
+                menu.addItem(pinnedItem)
+
                 menu.addItem(.separator())
             }
 
@@ -289,6 +297,12 @@ struct ThumbnailGridView: NSViewRepresentable {
             // contextMenu(for:)側で右クリック時点のfocusedImageIdは既に更新済みなので、
             // ここではトグルを呼ぶだけでよい。
             parent.appModel.quickLookController.toggle()
+        }
+
+        @objc private func showPinnedPreviewFromMenu(_ sender: NSMenuItem) {
+            guard let imageId = sender.representedObject as? Int64,
+                  let image = images.first(where: { $0.id == imageId }) else { return }
+            parent.appModel.showPinnedPreview(for: image)
         }
 
         @objc private func toggleTagFromMenu(_ sender: NSMenuItem) {

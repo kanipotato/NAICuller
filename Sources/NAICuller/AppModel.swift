@@ -24,6 +24,20 @@ final class AppModel: ObservableObject {
     private var exifToolService: ExifToolService?
     private var scanService: ScanService?
 
+    /// 固定表示ウィンドウを開くためのブリッジ。SwiftUIの`openWindow`環境アクションは
+    /// View（今回は`NAICullerApp`自身）でしか取得できないため、AppKit側の右クリック
+    /// メニューハンドラ（`ThumbnailGridView.Coordinator`）から呼べるようクロージャとして
+    /// 注入してもらう（ExifTool終了処理を`AppDelegate`経由でAppModelに注入しているのと
+    /// 同じ、View外からSwiftUIのシーンAPIを呼ぶための橋渡しパターン）。
+    var openPinnedPreviewWindow: ((Int64) -> Void)?
+
+    /// 右クリックメニュー「この画像を固定表示」の入口。選択に追従しない比較用ウィンドウを
+    /// 画像ごとに開く（実際に使ってみてのフィードバックで追加：Quick Lookは選択に追従する
+    /// 1枚しか出せないため、比較したい2枚を並べて置いておく手段が無かった）。
+    func showPinnedPreview(for image: ImageRecord) {
+        openPinnedPreviewWindow?(image.id)
+    }
+
     // MARK: - Published state
 
     @Published private(set) var roots: [Root] = []

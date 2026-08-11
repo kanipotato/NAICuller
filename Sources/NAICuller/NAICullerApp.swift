@@ -18,6 +18,7 @@ struct NAICullerApp: App {
     @StateObject private var appModel = AppModel()
     @State private var keyCommandHandler: KeyCommandHandler?
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         WindowGroup {
@@ -31,6 +32,7 @@ struct NAICullerApp: App {
                         keyCommandHandler = handler
                     }
                     appDelegate.appModel = appModel
+                    appModel.openPinnedPreviewWindow = { imageId in openWindow(value: imageId) }
                 }
         }
         .windowResizability(.contentSize)
@@ -41,6 +43,14 @@ struct NAICullerApp: App {
             SettingsView()
                 .environmentObject(appModel)
                 .frame(width: 480, height: 420)
+        }
+
+        // 「この画像を固定表示」用の独立ウィンドウ（詳細は`PinnedPreviewView`）。
+        // 値付き`WindowGroup(for:)`は、同じ値で`openWindow`を呼ぶと新規重複作成ではなく
+        // 既存ウィンドウを前面化してくれる（画像ごとに1枚だけ開く挙動を自前実装せずに済む）。
+        WindowGroup("固定表示", id: "pinnedPreview", for: Int64.self) { $imageId in
+            PinnedPreviewView(imageId: imageId)
+                .environmentObject(appModel)
         }
     }
 }
