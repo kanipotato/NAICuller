@@ -64,6 +64,17 @@ struct MainWindowView: View {
         } message: {
             Text(rootAdditionError ?? "")
         }
+        // 「削除対象」タグ付き画像のゴミ箱移動確認。完全削除ではなくゴミ箱移動なので復元は可能だが、
+        // 予期しない範囲を消さないよう必ず件数を見せてから確認する（他の削除系操作と同じ流儀）。
+        .alert("ゴミ箱へ移動しますか？", isPresented: Binding(
+            get: { appModel.pendingDeletionScope != nil },
+            set: { if !$0 { appModel.cancelDeleteMarkedImages() } }
+        )) {
+            Button("ゴミ箱へ移動", role: .destructive) { appModel.confirmDeleteMarkedImages() }
+            Button("キャンセル", role: .cancel) { appModel.cancelDeleteMarkedImages() }
+        } message: {
+            Text("「削除対象」タグが付いた画像\(appModel.pendingDeletionCount)件をゴミ箱へ移動します。ゴミ箱からは復元できます。")
+        }
     }
 
     @ToolbarContentBuilder
@@ -143,6 +154,30 @@ struct MainWindowView: View {
                 shortcutsHelpContent
             }
         }
+
+        // 「削除対象」タグが付いた画像だけをゴミ箱へ移動するメニュー（実際に使ってみての
+        // フィードバックで追加）。対象が1件も無ければ押しても意味が無いので無効化しておく。
+        ToolbarItem {
+            Menu {
+                Button("選択中の削除対象を削除...") {
+                    appModel.requestDeleteSelectedMarkedImages()
+                }
+                .disabled(appModel.selectedImageIds.isEmpty)
+                Button("削除対象を全て削除...") {
+                    appModel.requestDeleteAllMarkedImages()
+                }
+            } label: {
+                Label("削除", systemImage: "trash")
+            }
+            .disabled(deletionMarkCount == 0)
+            .help("「削除対象」タグが付いた画像をゴミ箱へ移動する")
+        }
+    }
+
+    /// 「削除対象」タグが付いている画像の総数（サイドバーのタグ件数表示と同じ集計）。
+    private var deletionMarkCount: Int {
+        guard let tag = appModel.tags.first(where: { $0.name == Tag.SystemTagName.deletionMark }) else { return 0 }
+        return appModel.tagCounts[tag.id] ?? 0
     }
 
     // MARK: - ショートカット一覧（画面のどこにも表示が無いとの指摘に対応）

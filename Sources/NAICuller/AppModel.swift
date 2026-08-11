@@ -64,6 +64,15 @@ final class AppModel: ObservableObject {
     @Published var pendingOrphans: [(id: Int64, path: String)] = []
     @Published var showOrphanConfirmation = false
 
+    /// 「削除対象」タグ付き画像のゴミ箱移動範囲。確認ダイアログを出す前の下ごしらえとして
+    /// nil以外を保持する（実際の移動はconfirmDeleteMarkedImages()を呼ぶまで実行しない）。
+    enum DeletionScope {
+        case selected
+        case all
+    }
+    @Published var pendingDeletionScope: DeletionScope?
+    @Published private(set) var pendingDeletionCount: Int = 0
+
     private var toastDismissTask: Task<Void, Never>?
     /// `toggleTag`が非同期（ExifTool書き込み待ち）の間、同じ(画像, タグ)への二重トグルを
     /// 防ぐための進行中セット（レビュー指摘の修正：キーリピート等で同じキーが連打されると、
@@ -247,6 +256,101 @@ final class AppModel: ObservableObject {
     func dismissOrphanConfirmation() {
         pendingOrphans = []
         showOrphanConfirmation = false
+    }
+
+    // MARK: - 削除対象タグの一括削除（実際に使ってみてのフィードバックで追加）
+    //
+    // ドラフト段階の設計方針「アプリはファイルシステムに破壊的操作をしない」から意図的に外れる
+    // 唯一の例外。ドラフトの「懸念・未解決」でも「ゴミ箱移動(NSWorkspace.recycle)は初版スコープ外。
+    // 将来必要なら追加検討」と明記していた、その"将来"が実際に来た形。事故を避けるため、
+    // 完全削除ではなく常にゴミ箱移動（復元可能）にし、対象は常に「削除対象タグが付いている画像」
+    // だけに厳密に絞る（選択に紛れ込んだ未タグの画像は対象外として黙って除外する）。
+
+    /// 選択中の画像のうち「削除対象」タグが付いているものだけを数え、確認ダイアログの表示を要求する。
+    /// 実際の移動はconfirmDeleteMarkedImages()を呼ぶまで実行しない。
+    func requestDeleteSelectedMarkedImages() {
+        let targets = selectedMarkedImages()
+        guard !targets.isEmpty else {
+            showToast("選択中に「削除対象」タグの画像が無いよ")
+            return
+        }
+        pendingDeletionCount = targets.count
+        pendingDeletionScope = .selected
+    }
+
+    /// ライブラリ全体で「削除対象」タグが付いている画像（選択状態やフィルタとは無関係）を数え、
+    /// 確認ダイアログの表示を要求する。
+    func requestDeleteAllMarkedImages() {
+        let targets = allMarkedImages()
+        guard !targets.isEmpty else {
+            showToast("「削除対象」タグの画像が無いよ")
+            return
+        }
+        pendingDeletionCount = targets.count
+        pendingDeletionScope = .all
+    }
+
+    func confirmDeleteMarkedImages() {
+        guard let scope = pendingDeletionScope else { return }
+        let targets = scope == .selected ? selectedMarkedImages() : allMarkedImages()
+        pendingDeletionScope = nil
+        performTrashDeletion(targets)
+    }
+
+    func cancelDeleteMarkedImages() {
+        pendingDeletionScope = nil
+    }
+
+    private func deletionMarkTagId() -> Int64? {
+        tags.first(where: { $0.name == Tag.SystemTagName.deletionMark })?.id
+    }
+
+    private func selectedMarkedImages() -> [ImageRecord] {
+        guard let tagId = deletionMarkTagId() else { return [] }
+        let markedIds = (try? tagRepository.imageIds(taggedWith: tagId)) ?? []
+        return images.filter { selectedImageIds.contains($0.id) && markedIds.contains($0.id) }
+    }
+
+    private func allMarkedImages() -> [ImageRecord] {
+        guard let tagId = deletionMarkTagId() else { return [] }
+        let markedIds = (try? tagRepository.imageIds(taggedWith: tagId)) ?? []
+        return images.filter { markedIds.contains($0.id) }
+    }
+
+    /// 実際にゴミ箱へ移動する（`NSWorkspace.recycle`。完全削除ではなく復元可能な移動）。
+    /// 移動に成功したものだけDBレコードを削除する（ExifTool書き込みの成否でDB更新を判断する
+    /// 既存のタグ付けロジックと同じ考え方：ファイル操作が実際に成功した分だけ反映する）。
+    private func performTrashDeletion(_ targets: [ImageRecord]) {
+        guard !targets.isEmpty else { return }
+        let urls = targets.map(\.url)
+        NSWorkspace.shared.recycle(urls) { [weak self] newURLs, error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let succeededPaths = Set(newURLs.keys.map(\.path))
+                let succeededTargets = targets.filter { succeededPaths.contains($0.path) }
+                let failedCount = targets.count - succeededTargets.count
+                if !succeededTargets.isEmpty {
+                    do {
+                        try self.imageRepository.deleteImages(ids: succeededTargets.map(\.id))
+                    } catch {
+                        self.presentAlert(message: "DBレコードの削除に失敗した", informative: "\(error)")
+                    }
+                    for image in succeededTargets {
+                        self.thumbnailService.invalidate(imageId: image.id)
+                    }
+                    self.selectedImageIds.subtract(Set(succeededTargets.map(\.id)))
+                }
+                self.reloadAll()
+                if failedCount == 0 {
+                    self.showToast("\(succeededTargets.count)件をゴミ箱へ移動したよ")
+                } else {
+                    self.presentAlert(
+                        message: "一部の移動に失敗した",
+                        informative: "\(succeededTargets.count)件成功・\(failedCount)件失敗。\(error.map { "\($0)" } ?? "")"
+                    )
+                }
+            }
+        }
     }
 
     // MARK: - タグ付け（4-2章：F/G/1-9共通のトグル機構）
