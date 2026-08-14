@@ -12,10 +12,11 @@ DMG_NAME="${APP_NAME}-${VERSION}.dmg"
 STAGING_DIR="${DIST_DIR}/dmg-staging"
 
 echo "==> ${APP_NAME} ${VERSION} をリリースビルド中..."
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 swift build -c release
 cp ".build/release/${APP_NAME}" "$APP/Contents/MacOS/${APP_NAME}"
 cp Info.plist "$APP/Contents/Info.plist"
+cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 # ad-hoc署名（Apple Developer証明書は未登録のため）。ダウンロードした人がFinderで開くと
 # quarantine属性により「壊れているため開けません」と出ることがある。README側に

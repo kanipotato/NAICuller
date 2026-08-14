@@ -4,12 +4,13 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 APP="build/NAICuller.app"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 swift build -c release
 
 cp ".build/release/NAICuller" "$APP/Contents/MacOS/NAICuller"
 cp Info.plist "$APP/Contents/Info.plist"
+cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 # ad-hoc署名（未署名だとmacOSが起動を渋ることがあるため）
 codesign --force --sign - "$APP"
