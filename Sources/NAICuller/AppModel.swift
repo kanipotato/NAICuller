@@ -114,6 +114,13 @@ final class AppModel: ObservableObject {
             }
         }
     }
+    /// 「削除対象」タグが付いた画像を表示から除外する（実際に使ってみてのフィードバックで追加。
+    /// ゴミ箱移動の対象として一旦マークした画像が、その後もタグ付け作業中ずっとグリッドに
+    /// 残り続けて邪魔になるため）。他の絞り込み条件（タグ絞り込み・未タグのみ・プロンプト
+    /// 検索/候補）とは独立して重ねがけできる、単純なON/OFFのふるい落としとして扱う。
+    @Published var hideDeletionMarked: Bool = false {
+        didSet { refreshFilteredImages() }
+    }
     @Published var selectedImageIds: Set<Int64> = []
     @Published var focusedImageId: Int64?
     @Published var thumbnailSize: ThumbnailSize = .medium
@@ -236,15 +243,19 @@ final class AppModel: ObservableObject {
     }
 
     /// サイドバーのルートチェックボックス・タグ絞り込み（AND条件：選択した全タグを持つ画像のみ）・
-    /// プロンプト検索・プロンプト候補絞り込みを適用し、`sortOrder`で並び替えた結果を
-    /// `filteredImages`に反映する。
+    /// プロンプト検索・プロンプト候補絞り込み・削除対象の除外を適用し、`sortOrder`で並び替えた
+    /// 結果を`filteredImages`に反映する。
     private func refreshFilteredImages() {
+        let deletionMarkId = hideDeletionMarked ? deletionMarkTagId() : nil
         let narrowed = images.filter { image in
             guard enabledRootIds.contains(image.rootId) else { return false }
             if showUntaggedOnly {
                 guard (imageTagIds[image.id] ?? []).isEmpty else { return false }
             } else if !selectedTagIds.isEmpty {
                 guard let tagIds = imageTagIds[image.id], selectedTagIds.isSubset(of: tagIds) else { return false }
+            }
+            if let deletionMarkId, imageTagIds[image.id]?.contains(deletionMarkId) == true {
+                return false
             }
             if !promptSearchText.isEmpty {
                 guard let prompt = image.promptCache,

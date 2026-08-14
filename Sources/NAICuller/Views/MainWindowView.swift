@@ -293,6 +293,14 @@ struct MainWindowView: View {
                 }
                 .toggleStyle(.button)
                 .controlSize(.small)
+                // ゴミ箱移動待ちの画像がタグ付け作業中もずっとグリッドに残って邪魔、との
+                // フィードバックで追加。他の絞り込み条件とは独立して重ねがけできる単純なON/OFF。
+                Toggle(isOn: $appModel.hideDeletionMarked) {
+                    Text("削除対象を除外")
+                        .font(.caption)
+                }
+                .toggleStyle(.button)
+                .controlSize(.small)
             }
             tagChipsRow
             promptTermChipsRow
