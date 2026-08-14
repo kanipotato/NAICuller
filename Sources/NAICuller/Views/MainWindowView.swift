@@ -12,6 +12,8 @@ struct MainWindowView: View {
     @State private var showExportPopover = false
     @State private var showShortcutsHelp = false
     @State private var exportFields: Set<ExportFieldKind> = Set(ExportFieldKind.allCases)
+    @State private var showPromptCandidatesPopover = false
+    @State private var candidateSearchText = ""
 
     var body: some View {
         HSplitView {
@@ -288,6 +290,7 @@ struct MainWindowView: View {
                 // タグを付ける前の画像は当然まだタグで絞り込めないので、その手前の絞り込み手段として
                 // プロンプト本文の部分一致検索を用意した（タグ付け作業の入り口）。
                 promptSearchField
+                promptCandidatesButton
                 // タグ絞り込みでは「付いているもの」しか探せなかったので、その裏返し
                 // （まだ手を付けていないもの）を残すためのトグルを追加した。
                 Toggle(isOn: $appModel.showUntaggedOnly) {
@@ -298,9 +301,127 @@ struct MainWindowView: View {
                 .controlSize(.small)
             }
             tagChipsRow
+            promptTermChipsRow
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
+    }
+
+    // MARK: - プロンプト候補絞り込み（実際に使ってみてのフィードバックで追加：ルート内に
+    // どんなプロンプトがあるか事前に把握していないと、上のプロンプト検索欄に何を打てば
+    // いいか分からないため、頻出語句を分析して候補から選べる入り口を用意した）。
+
+    private var promptCandidatesButton: some View {
+        Button {
+            appModel.analyzePromptCandidates()
+            showPromptCandidatesPopover = true
+        } label: {
+            Image(systemName: "list.bullet.circle")
+        }
+        .buttonStyle(.plain)
+        .help("有効なルート内のプロンプトを分析し、候補から絞り込む")
+        .popover(isPresented: $showPromptCandidatesPopover) {
+            promptCandidatesPopover
+        }
+    }
+
+    @ViewBuilder
+    private var promptCandidatesPopover: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("プロンプト候補").font(.headline)
+                Spacer()
+                Button {
+                    appModel.analyzePromptCandidates()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.plain)
+                .help("有効なルートの内容を元に再分析")
+            }
+            Text("有効なルート内の画像プロンプトを分析した候補だよ（2件以上の画像に登場した語句のみ、多い順）")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            TextField("候補を絞り込み", text: $candidateSearchText)
+                .textFieldStyle(.roundedBorder)
+                .font(.caption)
+
+            if appModel.isAnalyzingPromptCandidates {
+                ProgressView()
+                    .frame(maxWidth: .infinity, minHeight: 120)
+            } else if appModel.promptCandidates.isEmpty {
+                Text("候補が無いよ（有効なルートにプロンプトが読み込まれた画像が無いかも）")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(minHeight: 60)
+            } else {
+                let candidates = candidateSearchText.isEmpty
+                    ? appModel.promptCandidates
+                    : appModel.promptCandidates.filter { $0.term.localizedCaseInsensitiveContains(candidateSearchText) }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(candidates) { candidate in
+                            Toggle(isOn: Binding(
+                                get: { appModel.selectedPromptTerms.contains(candidate.term) },
+                                set: { isOn in
+                                    if isOn {
+                                        appModel.selectedPromptTerms.insert(candidate.term)
+                                    } else {
+                                        appModel.selectedPromptTerms.remove(candidate.term)
+                                    }
+                                }
+                            )) {
+                                HStack {
+                                    Text(candidate.term)
+                                        .font(.caption)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text("\(candidate.count)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .toggleStyle(.checkbox)
+                        }
+                    }
+                }
+                .frame(minHeight: 200, maxHeight: 320)
+            }
+        }
+        .padding()
+        .frame(width: 300)
+    }
+
+    @ViewBuilder
+    private var promptTermChipsRow: some View {
+        if !appModel.selectedPromptTerms.isEmpty {
+            FlowLayout(spacing: 6) {
+                ForEach(appModel.selectedPromptTerms.sorted(), id: \.self) { term in
+                    HStack(spacing: 4) {
+                        Text(term)
+                            .font(.caption)
+                        Button {
+                            appModel.selectedPromptTerms.remove(term)
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    // タグ絞り込みのチップ（アクセントカラー）と見分けが付くよう別色にする。
+                    .background(Capsule().fill(Color.orange.opacity(0.2)))
+                }
+                Button("すべて解除") {
+                    appModel.selectedPromptTerms.removeAll()
+                }
+                .buttonStyle(.plain)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private var promptSearchField: some View {

@@ -91,6 +91,16 @@ final class AppModel: ObservableObject {
     @Published var sortOrder: ImageSortOrder = .dateNewest {
         didSet { refreshFilteredImages() }
     }
+    /// プロンプト候補絞り込み（AND条件：選択した全語句を含む画像のみ）。
+    /// 実際に使ってみてのフィードバックで追加：ルート内にどんなプロンプトがあるか
+    /// 事前に把握していないと`promptSearchText`に何を打てばいいか分からないため、
+    /// 候補を分析して選ぶ入り口を用意した。
+    @Published var selectedPromptTerms: Set<String> = [] {
+        didSet { refreshFilteredImages() }
+    }
+    /// `analyzePromptCandidates()`の結果（頻度順）。ポップオーバーを開くたびに再計算する。
+    @Published private(set) var promptCandidates: [PromptCandidate] = []
+    @Published private(set) var isAnalyzingPromptCandidates = false
     /// タグが1つも付いていない画像だけを表示する（実際に使ってみてのフィードバックで追加。
     /// タグ付け済みのものはタグ絞り込みで見つけられるが、その裏返し＝「まだ手を付けていない
     /// もの」を残すためのフィルタが無かった）。ONにした瞬間、タグ絞り込みと同時に使うと
@@ -226,7 +236,8 @@ final class AppModel: ObservableObject {
     }
 
     /// サイドバーのルートチェックボックス・タグ絞り込み（AND条件：選択した全タグを持つ画像のみ）・
-    /// プロンプト検索を適用し、`sortOrder`で並び替えた結果を`filteredImages`に反映する。
+    /// プロンプト検索・プロンプト候補絞り込みを適用し、`sortOrder`で並び替えた結果を
+    /// `filteredImages`に反映する。
     private func refreshFilteredImages() {
         let narrowed = images.filter { image in
             guard enabledRootIds.contains(image.rootId) else { return false }
@@ -238,6 +249,11 @@ final class AppModel: ObservableObject {
             if !promptSearchText.isEmpty {
                 guard let prompt = image.promptCache,
                       prompt.range(of: promptSearchText, options: [.caseInsensitive]) != nil else { return false }
+            }
+            if !selectedPromptTerms.isEmpty {
+                guard let prompt = image.promptCache else { return false }
+                let terms = PromptCandidateAnalyzer.terms(in: prompt)
+                guard selectedPromptTerms.isSubset(of: terms) else { return false }
             }
             return true
         }
@@ -252,6 +268,28 @@ final class AppModel: ObservableObject {
         selectedImageIds.formIntersection(visibleIds)
         if let focusedImageId, !visibleIds.contains(focusedImageId) {
             self.focusedImageId = nil
+        }
+    }
+
+    // MARK: - プロンプト候補絞り込み
+
+    /// 「有効なルート」内の画像プロンプトを分析し、`promptCandidates`を更新する
+    /// （プロンプト候補絞り込みポップオーバーを開いたとき・再分析ボタンで呼ぶ）。
+    /// タグ絞り込みや既存のプロンプト検索は意図的に無視する：あくまで「今見えているルート内に
+    /// どんなプロンプトがあるか」の全体像を示す入り口なので、他の絞り込み条件で候補自体が
+    /// 先細りしていく（後から使いたかった語句が候補から消える）のを避けるため。
+    func analyzePromptCandidates() {
+        isAnalyzingPromptCandidates = true
+        let prompts = images
+            .filter { enabledRootIds.contains($0.rootId) }
+            .compactMap(\.promptCache)
+        Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                PromptCandidateAnalyzer.analyze(prompts: prompts)
+            }.value
+            guard let self else { return }
+            self.promptCandidates = result
+            self.isAnalyzingPromptCandidates = false
         }
     }
 
