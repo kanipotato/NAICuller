@@ -104,6 +104,18 @@ final class ExifToolServiceTests: XCTestCase {
         XCTAssertThrowsError(try service.readMetadata(path: "/no/such/file.png"))
     }
 
+    /// 実機で発生した不具合の回帰テスト：`ExifToolProcess.close()`は以前
+    /// `Process.waitUntilExit()`をタイムアウト無しで呼んでおり、アプリ終了処理
+    /// （メインスレッド）から呼ばれた際にexiftool側が即座に終了しないと無期限に
+    /// フリーズしてしまう不具合があった（Quitが効かなくなり強制終了するしかなくなった）。
+    /// `close()`が有限時間で返ることを確認する（タイムアウト値2秒に対して十分小さい上限）。
+    func testCloseReturnsPromptlyRatherThanBlockingIndefinitely() {
+        let start = Date()
+        service.close()
+        service = nil // tearDownで二重にcloseを呼ばないようにする
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5.0, "closeが正常系で長時間ブロックしている")
+    }
+
     /// 書き込み権限のないディレクトリ配下のファイルへのタグ付けはエラーになる
     /// （詳細設計 5章：「ExifTool書き込み失敗 → トースト通知、DBのタグ状態は変更しない」の前提となる動作）。
     /// exiftoolは`-overwrite_original`でも「一時ファイルを同ディレクトリに作ってrenameする」実装のため、

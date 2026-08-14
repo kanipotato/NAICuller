@@ -97,7 +97,26 @@ public final class ExifToolProcess {
                 try? stdinHandle.write(contentsOf: data)
             }
             try? stdinHandle.close()
+        }
+        waitForExitWithTimeout()
+    }
+
+    /// `Process.waitUntilExit()`はタイムアウトの概念が無く、プロセスが終了するまで
+    /// 呼び出し元スレッドを無期限にブロックするAPI。`close()`はアプリ終了処理
+    /// （`applicationWillTerminate`）からメインスレッド上で同期的に呼ばれるため、
+    /// 何らかの理由でexiftool側が`-stay_open False`を受け取っても即座に終了しない場合、
+    /// アプリ全体が応答不能になり、Quitすら効かなくなる（実機で発生を確認：AppleEventが
+    /// タイムアウトし、強制終了するしかない状態になった）。別スレッドで待ち、
+    /// タイムアウトしたら`terminate()`で強制終了することでこれを防ぐ。
+    private func waitForExitWithTimeout(seconds: TimeInterval = 2.0) {
+        let process = self.process
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async {
             process.waitUntilExit()
+            semaphore.signal()
+        }
+        if semaphore.wait(timeout: .now() + seconds) == .timedOut {
+            process.terminate()
         }
     }
 }
