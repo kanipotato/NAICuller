@@ -20,22 +20,32 @@ struct PinnedPreviewView: View {
     @EnvironmentObject private var appModel: AppModel
     let imageId: Int64?
 
-    private var image: ImageRecord? {
-        guard let imageId else { return nil }
-        return appModel.images.first(where: { $0.id == imageId })
-    }
+    /// コードレビュー指摘の修正：以前は`appModel.images.first(where:)`を計算プロパティとして
+    /// bodyから呼んでいた。`@EnvironmentObject`はAppModelのあらゆる`@Published`変化で
+    /// bodyを再評価させるため、矢印キーで選択を動かすたび（focusedImageId/selectedImageIdsの
+    /// 更新ごと）に開いている固定表示ウィンドウの枚数だけ全画像2万件の線形探索が走っていた。
+    /// この機能は「複数窓を開いたまま作業する」のが主旨なので実害が出やすい。
+    /// 表示対象はウィンドウの生存期間中ずっと不変なので、一度だけ解決して保持する。
+    @State private var resolvedImage: ImageRecord?
 
     var body: some View {
         Group {
-            if let image {
-                PinnedPreviewImageLoader(image: image)
+            if let resolvedImage {
+                PinnedPreviewImageLoader(image: resolvedImage)
             } else {
                 Text("画像が見つからないよ（削除された可能性があるよ）")
                     .foregroundStyle(.secondary)
                     .frame(minWidth: 300, minHeight: 200)
             }
         }
-        .navigationTitle(image.map { URL(fileURLWithPath: $0.path).lastPathComponent } ?? "固定表示")
+        .navigationTitle(resolvedImage.map { URL(fileURLWithPath: $0.path).lastPathComponent } ?? "固定表示")
+        .task(id: imageId) {
+            guard let imageId else {
+                resolvedImage = nil
+                return
+            }
+            resolvedImage = appModel.images.first(where: { $0.id == imageId })
+        }
     }
 }
 

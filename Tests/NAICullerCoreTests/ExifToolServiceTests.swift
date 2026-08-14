@@ -116,6 +116,18 @@ final class ExifToolServiceTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(start), 5.0, "closeが正常系で長時間ブロックしている")
     }
 
+    /// コードレビュー指摘の回帰テスト：`close()`の`guard isRunning`はクロージャからの脱出
+    /// でしかなく、以前は閉じ済みでも待機処理まで到達していた。2回目以降のclose()は
+    /// 何もせず即座に返ること（shutdown()の後にdeinitが走る経路で余計な待機をしない）。
+    func testSecondCloseIsNoOpAndReturnsImmediately() {
+        service.close()
+        let start = Date()
+        service.close() // 2回目
+        service.close() // 3回目
+        service = nil
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.5, "閉じ済みのcloseが待機している")
+    }
+
     /// 書き込み権限のないディレクトリ配下のファイルへのタグ付けはエラーになる
     /// （詳細設計 5章：「ExifTool書き込み失敗 → トースト通知、DBのタグ状態は変更しない」の前提となる動作）。
     /// exiftoolは`-overwrite_original`でも「一時ファイルを同ディレクトリに作ってrenameする」実装のため、

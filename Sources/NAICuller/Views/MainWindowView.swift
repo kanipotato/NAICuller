@@ -177,7 +177,11 @@ struct MainWindowView: View {
                 Button("選択中の削除対象を削除...") {
                     appModel.requestDeleteSelectedMarkedImages()
                 }
-                .disabled(appModel.selectedImageIds.isEmpty)
+                // コードレビュー指摘の修正：「削除対象を除外」中は削除対象がグリッドから
+                // 消えている＝選択にも残らない（refreshFilteredImagesが選択を可視分に
+                // 絞り込む）ので、この項目は絶対に成立しない。押せてしまうと
+                // 「選択中に削除対象が無いよ」と言われるだけなので、最初から無効化する。
+                .disabled(appModel.selectedImageIds.isEmpty || appModel.hideDeletionMarked)
                 Button("削除対象を全て削除...") {
                     appModel.requestDeleteAllMarkedImages()
                 }
@@ -315,6 +319,9 @@ struct MainWindowView: View {
 
     private var promptCandidatesButton: some View {
         Button {
+            // 前回の検索語が残っていると、開いた瞬間に理由の分からない絞り込み済み一覧に
+            // 見えるのでクリアしてから開く（コードレビュー指摘）。
+            candidateSearchText = ""
             appModel.analyzePromptCandidates()
             showPromptCandidatesPopover = true
         } label: {
@@ -361,34 +368,43 @@ struct MainWindowView: View {
                 let candidates = candidateSearchText.isEmpty
                     ? appModel.promptCandidates
                     : appModel.promptCandidates.filter { $0.term.localizedCaseInsensitiveContains(candidateSearchText) }
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(candidates) { candidate in
-                            Toggle(isOn: Binding(
-                                get: { appModel.selectedPromptTerms.contains(candidate.term) },
-                                set: { isOn in
-                                    if isOn {
-                                        appModel.selectedPromptTerms.insert(candidate.term)
-                                    } else {
-                                        appModel.selectedPromptTerms.remove(candidate.term)
+                // コードレビュー指摘の修正：空判定を絞り込み前の配列にしか掛けていなかったため、
+                // 検索語に一致する候補がゼロだと説明の無い空白ペインになっていた。
+                if candidates.isEmpty {
+                    Text("「\(candidateSearchText)」に一致する候補が無いよ")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 60)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(candidates) { candidate in
+                                Toggle(isOn: Binding(
+                                    get: { appModel.selectedPromptTerms.contains(candidate.term) },
+                                    set: { isOn in
+                                        if isOn {
+                                            appModel.selectedPromptTerms.insert(candidate.term)
+                                        } else {
+                                            appModel.selectedPromptTerms.remove(candidate.term)
+                                        }
+                                    }
+                                )) {
+                                    HStack {
+                                        Text(candidate.term)
+                                            .font(.caption)
+                                            .lineLimit(1)
+                                        Spacer()
+                                        Text("\(candidate.count)")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
                                     }
                                 }
-                            )) {
-                                HStack {
-                                    Text(candidate.term)
-                                        .font(.caption)
-                                        .lineLimit(1)
-                                    Spacer()
-                                    Text("\(candidate.count)")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
+                                .toggleStyle(.checkbox)
                             }
-                            .toggleStyle(.checkbox)
                         }
                     }
+                    .frame(minHeight: 200, maxHeight: 320)
                 }
-                .frame(minHeight: 200, maxHeight: 320)
             }
         }
         .padding()

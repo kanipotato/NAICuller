@@ -90,14 +90,21 @@ public final class ExifToolProcess {
     /// `-stay_open False`を送って穏当にプロセスを終了させる。アプリ終了時やExifTool未検出時の
     /// 再チェック前に呼ぶ。内部の書き込み・クローズ処理はベストエフォートのため例外は投げない。
     public func close() {
-        queue.sync {
-            guard isRunning else { return }
+        // コードレビュー指摘の修正：`guard isRunning else { return }`はクロージャからの
+        // 脱出でしかないため、以前は既に閉じ済みでも`waitForExitWithTimeout()`まで到達し、
+        // 2回目以降のclose()（shutdown()の後にdeinitが走る経路など）でも待機用スレッドを
+        // 起こしていた。terminate()が効かない状況では呼び出し元（recheckExifTool()の
+        // メインアクター）をさらに2秒ブロックしうる。実際に終了処理を行った回だけ待つ。
+        let didInitiateShutdown: Bool = queue.sync {
+            guard isRunning else { return false }
             isRunning = false
             if let data = "-stay_open\nFalse\n".data(using: .utf8) {
                 try? stdinHandle.write(contentsOf: data)
             }
             try? stdinHandle.close()
+            return true
         }
+        guard didInitiateShutdown else { return }
         waitForExitWithTimeout()
     }
 

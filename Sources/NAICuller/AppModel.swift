@@ -60,7 +60,11 @@ final class AppModel: ObservableObject {
             // 「未タグのみ」表示中にタグをクリックすると絞り込みの実体（showUntaggedOnly）と
             // 見た目（選択済み表示のタグ・チップ表示）が食い違うコードレビュー指摘があった。
             // 双方向にすることで、どちらから変更してもお互いを正しく解除し合うようにする。
-            if !selectedTagIds.isEmpty, showUntaggedOnly {
+            // コードレビュー指摘の修正：「削除対象タグで絞り込む」と「削除対象を除外」も
+            // 必ず0件になる組み合わせなので、`showUntaggedOnly`と同じく相手側を自動解除する。
+            if hideDeletionMarked, let markId = deletionMarkTagId(), selectedTagIds.contains(markId) {
+                hideDeletionMarked = false // didSetの中でrefreshFilteredImages()が呼ばれる
+            } else if !selectedTagIds.isEmpty, showUntaggedOnly {
                 showUntaggedOnly = false // didSetの中でrefreshFilteredImages()が呼ばれる
             } else {
                 refreshFilteredImages()
@@ -116,10 +120,20 @@ final class AppModel: ObservableObject {
     }
     /// 「削除対象」タグが付いた画像を表示から除外する（実際に使ってみてのフィードバックで追加。
     /// ゴミ箱移動の対象として一旦マークした画像が、その後もタグ付け作業中ずっとグリッドに
-    /// 残り続けて邪魔になるため）。他の絞り込み条件（タグ絞り込み・未タグのみ・プロンプト
-    /// 検索/候補）とは独立して重ねがけできる、単純なON/OFFのふるい落としとして扱う。
+    /// 残り続けて邪魔になるため）。タグ絞り込み・未タグのみ・プロンプト検索/候補とは
+    /// 独立して重ねがけできる単純なON/OFFのふるい落とし。
+    ///
+    /// コードレビュー指摘の修正：唯一「削除対象タグでの絞り込み」とだけは必ず0件になる
+    /// 組み合わせなので、`showUntaggedOnly`と`selectedTagIds`が既にそうしているのと同じ流儀で
+    /// 相手側を自動解除する（矛盾した条件で空グリッドを見せて理由が分からない状態にしない）。
     @Published var hideDeletionMarked: Bool = false {
-        didSet { refreshFilteredImages() }
+        didSet {
+            if hideDeletionMarked, let markId = deletionMarkTagId(), selectedTagIds.contains(markId) {
+                selectedTagIds.remove(markId) // didSetの中でrefreshFilteredImages()が呼ばれる
+            } else {
+                refreshFilteredImages()
+            }
+        }
     }
     @Published var selectedImageIds: Set<Int64> = []
     @Published var focusedImageId: Int64?
@@ -142,6 +156,18 @@ final class AppModel: ObservableObject {
 
     private var toastDismissTask: Task<Void, Never>?
     private var searchDebounceTask: Task<Void, Never>?
+    /// プロンプト候補分析の進行中タスク。コードレビュー指摘の修正：多重起動のガードが無く、
+    /// 先に開始した分析が後から終わると新しい結果を古い結果で上書きしうる（かつ先に終わった
+    /// 方が`isAnalyzingPromptCandidates`をfalseにするのでスピナーが早く消える）ため、
+    /// 新しい分析を始める前に前のものをキャンセルする。
+    private var promptAnalysisTask: Task<Void, Never>?
+    /// 画像IDごとのプロンプト語句集合のキャッシュ。コードレビュー指摘の修正：以前は
+    /// `refreshFilteredImages()`のフィルタ内で毎回`PromptCandidateAnalyzer.terms(in:)`を
+    /// 呼んでおり、プロンプト候補で絞り込み中はタグ付けキーを1打鍵するたびに
+    /// （toggleTag→reloadImages→refreshFilteredImages の経路で）全画像分のプロンプト文字列を
+    /// 分割・小文字化・Set生成し直していた。2万枚規模では打鍵ごとに体感できる停止になる。
+    /// プロンプト本文は再スキャンでしか変わらないので、画像IDをキーに使い回す。
+    private var promptTermsCache: [Int64: Set<String>] = [:]
     /// `toggleTag`が非同期（ExifTool書き込み待ち）の間、同じ(画像, タグ)への二重トグルを
     /// 防ぐための進行中セット（レビュー指摘の修正：キーリピート等で同じキーが連打されると、
     /// 1回目の完了を待たずに2回目が同じ`currentlyTagged`スナップショットを読んでしまい、
@@ -262,9 +288,8 @@ final class AppModel: ObservableObject {
                       prompt.range(of: promptSearchText, options: [.caseInsensitive]) != nil else { return false }
             }
             if !selectedPromptTerms.isEmpty {
-                guard let prompt = image.promptCache else { return false }
-                let terms = PromptCandidateAnalyzer.terms(in: prompt)
-                guard selectedPromptTerms.isSubset(of: terms) else { return false }
+                guard image.promptCache != nil else { return false }
+                guard selectedPromptTerms.isSubset(of: promptTerms(for: image)) else { return false }
             }
             return true
         }
@@ -284,21 +309,32 @@ final class AppModel: ObservableObject {
 
     // MARK: - プロンプト候補絞り込み
 
+    /// 画像1件分のプロンプト語句集合を返す（`promptTermsCache`経由で使い回す）。
+    private func promptTerms(for image: ImageRecord) -> Set<String> {
+        if let cached = promptTermsCache[image.id] { return cached }
+        let terms = PromptCandidateAnalyzer.terms(in: image.promptCache ?? "")
+        promptTermsCache[image.id] = terms
+        return terms
+    }
+
     /// 「有効なルート」内の画像プロンプトを分析し、`promptCandidates`を更新する
     /// （プロンプト候補絞り込みポップオーバーを開いたとき・再分析ボタンで呼ぶ）。
     /// タグ絞り込みや既存のプロンプト検索は意図的に無視する：あくまで「今見えているルート内に
     /// どんなプロンプトがあるか」の全体像を示す入り口なので、他の絞り込み条件で候補自体が
     /// 先細りしていく（後から使いたかった語句が候補から消える）のを避けるため。
     func analyzePromptCandidates() {
+        // コードレビュー指摘の修正：前回の分析が走っていれば捨てる（結果の追い越しを防ぐ）。
+        promptAnalysisTask?.cancel()
         isAnalyzingPromptCandidates = true
         let prompts = images
             .filter { enabledRootIds.contains($0.rootId) }
             .compactMap(\.promptCache)
-        Task { [weak self] in
+        promptAnalysisTask = Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
                 PromptCandidateAnalyzer.analyze(prompts: prompts)
             }.value
-            guard let self else { return }
+            // キャンセル済み（＝より新しい分析が始まっている）なら結果もスピナーも触らない。
+            guard !Task.isCancelled, let self else { return }
             self.promptCandidates = result
             self.isAnalyzingPromptCandidates = false
         }
@@ -348,6 +384,10 @@ final class AppModel: ObservableObject {
                 for id in result.changedImageIds {
                     self.thumbnailService.invalidate(imageId: id)
                 }
+                // プロンプト本文が変わりうるのは再スキャンのときだけなので、
+                // 語句キャッシュの破棄もここだけでよい（毎回のreloadImagesでは捨てない。
+                // 捨ててしまうとタグ付け1打鍵ごとに再構築が走り、キャッシュの意味が無くなる）。
+                self.promptTermsCache.removeAll()
                 self.reloadAll()
                 if !result.orphanImages.isEmpty {
                     self.pendingOrphans = result.orphanImages

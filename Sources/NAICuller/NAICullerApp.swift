@@ -89,7 +89,14 @@ struct NAICullerCommands: Commands {
             Button("NAICuller ヘルプ") {
                 openWindow(id: "help")
             }
-            .keyboardShortcut("?", modifiers: .command)
+            // コードレビュー指摘の修正：元は`.keyboardShortcut("?", modifiers: .command)`で、
+            // ショートカットが一度も発火しなかった（メニューをクリックすれば開くのに
+            // Cmd+Shift+/では開かない、を実機で再現）。AppKitはキー等価をイベントの
+            // `charactersIgnoringModifiers`で照合するが、US配列のCmd+Shift+/ではこれが
+            // "?"ではなく"/"になるため、文字が"?"のままだと修飾キーマスクを直しても
+            // 一致しない（マスクだけShift付きにする案も実機で試して駄目だった）。
+            // 実際に届く文字である"/"＋[.command, .shift]で登録する。
+            .keyboardShortcut("/", modifiers: [.command, .shift])
         }
     }
 }

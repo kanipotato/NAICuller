@@ -25,40 +25,55 @@ struct DetailPanelView: View {
         // （以前は内側のVStackに`.id(image.id)`を付けていたが、それがルート直下に来る構造に
         // なっていたため顕在化した）。画像を切り替えてもViewの同一性自体は変えず、
         // 画像ごとにリセットしたい状態（プロンプト折りたたみ）だけ`onChange`で個別に戻す。
-        Group {
-            if let image = focusedImage {
-                // プレビューはScrollViewの外に固定表示する（末端まで送った後の弾性スクロールで
-                // 提案される高さがフレームごとに微妙に変動し、aspectRatio(.fit)の再計算が連鎖して
-                // プレビューが拡大縮小を繰り返す(ガタつく)不具合があったため。ScrollViewの中に
-                // 置いたままだと画像の高さがスクロールの揺れに依存してしまう構造そのものが原因なので、
-                // 揺れの入力を受けない場所に出すことで根本的に断つ）。
-                VStack(alignment: .leading, spacing: 0) {
-                    previewSection(image)
-                        .padding()
-                    Divider()
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 16) {
-                            tagSection(image)
-                            Divider()
-                            systemInfoSection(image)
-                            Divider()
-                            promptSection(image)
-                        }
-                        .padding()
+        // 実際に使ってみてのフィードバックで修正：以前は「画像あり」と「未選択」で
+        // `if/else`のサブツリーの構造そのものを差し替えていた（VStack+ScrollView ⇔ 素のVStack）。
+        // 構造が入れ替わるとHSplitViewがペイン幅を計算し直すため、1枚目を選んだ瞬間に
+        // パネルが最大幅(480pt)から最小幅(260pt)へカクッと縮んでいた（実測で確認）。
+        // 外側のフレームを揃えるだけでは足りず、**両状態で同じ構造を描く**必要がある。
+        // プレビュー枠・Divider・ScrollViewは常に同じ位置に置き、中身だけを差し替える。
+        VStack(alignment: .leading, spacing: 0) {
+            // プレビューはScrollViewの外に固定表示する（末端まで送った後の弾性スクロールで
+            // 提案される高さがフレームごとに微妙に変動し、aspectRatio(.fit)の再計算が連鎖して
+            // プレビューが拡大縮小を繰り返す(ガタつく)不具合があったため。ScrollViewの中に
+            // 置いたままだと画像の高さがスクロールの揺れに依存してしまう構造そのものが原因なので、
+            // 揺れの入力を受けない場所に出すことで根本的に断つ）。
+            previewArea
+                .padding()
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let image = focusedImage {
+                        tagSection(image)
+                        Divider()
+                        systemInfoSection(image)
+                        Divider()
+                        promptSection(image)
                     }
                 }
-            } else {
-                VStack {
-                    Spacer(minLength: 60)
-                    Text("画像を選択してね")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: focusedImage?.id) { _ in
             promptExpanded = false
+        }
+    }
+
+    /// プレビュー領域。未選択時も同じ場所・同じ横幅の器を描き、パネル幅が選択の有無で
+    /// 動かないようにする（上のコメント参照）。
+    @ViewBuilder
+    private var previewArea: some View {
+        if let image = focusedImage {
+            previewSection(image)
+        } else {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.08))
+                .frame(maxWidth: .infinity, minHeight: 180)
+                .overlay {
+                    Text("画像を選択してね")
+                        .foregroundStyle(.secondary)
+                }
         }
     }
 
