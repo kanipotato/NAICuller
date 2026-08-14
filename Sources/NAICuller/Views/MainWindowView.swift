@@ -7,6 +7,7 @@ import NAICullerCore
 /// `HSplitView`で構成し、右パネルの幅をドラッグでリサイズ可能にする。
 struct MainWindowView: View {
     @EnvironmentObject private var appModel: AppModel
+    @Environment(\.openWindow) private var openWindow
     @State private var showExifToolMissingAlert = false
     @State private var rootAdditionError: String?
     @State private var showExportPopover = false
@@ -198,46 +199,39 @@ struct MainWindowView: View {
 
     @ViewBuilder
     private var shortcutsHelpContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("キーボードショートカット").font(.headline)
-
-            shortcutRow("← → / ↑ ↓", "前後の画像へ移動（プレビュー維持）")
-            shortcutRow("Space", "フォーカス中の画像をQuick Lookで大きく表示")
-            Divider()
-            shortcutRow("F", "お気に入り（トグル）")
-            shortcutRow("G", "削除対象としてマーク（トグル）")
-            Divider()
-            Text("カスタムタグ（設定 > キー割当で変更）")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            let customTagRows = appModel.tags
-                .filter { $0.keyBinding.flatMap(Int.init) != nil }
-                .sorted { ($0.keyBinding ?? "") < ($1.keyBinding ?? "") }
-            if customTagRows.isEmpty {
-                Text("未設定だよ")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(customTagRows) { tag in
-                    shortcutRow(tag.keyBinding ?? "", tag.name)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                // 使い方の要点だけを凝縮して置く（フルの説明は「?」ボタン／Helpメニューの
+                // 独立ヘルプウィンドウ側。実際に使ってみてのフィードバックで、作業中にサッと
+                // 見るこのポップオーバーと、初見でじっくり読む別ウィンドウの両方を用意した）。
+                Text("使い方").font(.headline)
+                ForEach(Array(HelpContent.usageSteps.enumerated()), id: \.offset) { index, step in
+                    HStack(alignment: .top, spacing: 6) {
+                        Text("\(index + 1).")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        Text(step)
+                            .font(.caption)
+                    }
                 }
-            }
-        }
-        .padding()
-        .frame(width: 260)
-    }
+                Button {
+                    showShortcutsHelp = false
+                    openWindow(id: "help")
+                } label: {
+                    Label("もっと詳しく（ヘルプウィンドウ）", systemImage: "questionmark.circle")
+                        .font(.caption)
+                }
+                .buttonStyle(.link)
 
-    private func shortcutRow(_ key: String, _ description: String) -> some View {
-        HStack(alignment: .top) {
-            Text(key)
-                .font(.caption.monospaced())
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.secondary.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
-            Text(description)
-                .font(.caption)
-            Spacer()
+                Divider()
+
+                Text("キーボードショートカット").font(.headline)
+                ShortcutsListContent()
+            }
+            .padding()
+            .frame(width: 280)
         }
+        .frame(maxHeight: 420)
     }
 
     // MARK: - エクスポート（詳細設計 4-3章：項目チェックボックス最低1つ必須、NSSavePanelで保存先選択）

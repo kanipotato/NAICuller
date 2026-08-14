@@ -36,6 +36,7 @@ struct NAICullerApp: App {
                 }
         }
         .windowResizability(.contentSize)
+        .commands { NAICullerCommands() }
 
         // 設定ウィンドウ（メニューから別窓。詳細設計 1章）。SwiftUIの`Settings`シーンは
         // 標準でCmd+,・アプリメニューの「設定…」に自動で紐づく。
@@ -51,6 +52,44 @@ struct NAICullerApp: App {
         WindowGroup("固定表示", id: "pinnedPreview", for: Int64.self) { $imageId in
             PinnedPreviewView(imageId: imageId)
                 .environmentObject(appModel)
+        }
+
+        // 独立したヘルプウィンドウ（詳細は`HelpWindowView`。実際に使ってみてのフィードバックで
+        // 追加：READMEは大半の人が読まないため、アプリ内で完結した使い方説明が要ると判断した）。
+        // `Window`（単一インスタンス）シーンなので、Helpメニューから何度開いても複製されず
+        // 既存ウィンドウが前面化される。
+        Window("ヘルプ", id: "help") {
+            HelpWindowView()
+                .environmentObject(appModel)
+        }
+    }
+}
+
+/// Appメニュー「NAICullerについて」・Helpメニューのカスタマイズ（バージョン情報とヘルプ導線）。
+/// - Aboutパネルは標準の`orderFrontStandardAboutPanel`（アプリ名・バージョンはInfo.plistから
+///   自動表示）に、ExifToolへの謝辞だけ`credits`として追加する簡素な構成にした
+///   （ユーザーの要望：「バージョンは簡素なものでOK」）。
+/// - HelpメニューはSwiftUI標準の検索欄付きメニューを`CommandGroup(replacing: .help)`で
+///   置き換え、独立ヘルプウィンドウを開く項目（Cmd+?、macOS標準のヘルプショートカット）にした。
+struct NAICullerCommands: Commands {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(replacing: .appInfo) {
+            Button("NAICullerについて") {
+                NSApplication.shared.orderFrontStandardAboutPanel(options: [
+                    NSApplication.AboutPanelOptionKey.credits: NSAttributedString(
+                        string: "NovelAI生成画像のタグ付け・仕分けビューワ\n\nプロンプトの読み取り・タグの書き込みには ExifTool（Phil Harvey氏作）を利用しています。\nhttps://exiftool.org/",
+                        attributes: [.font: NSFont.systemFont(ofSize: 11)]
+                    ),
+                ])
+            }
+        }
+        CommandGroup(replacing: .help) {
+            Button("NAICuller ヘルプ") {
+                openWindow(id: "help")
+            }
+            .keyboardShortcut("?", modifiers: .command)
         }
     }
 }

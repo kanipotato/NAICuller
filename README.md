@@ -37,7 +37,22 @@ NovelAIで生成したPNG画像（1万枚超）を、タグ付け→絞り込み
 - ビルドに Swift Package Manager（Xcode Command Line Tools に同梱）が必要
 - [ExifTool](https://exiftool.org/) が必要（`brew install exiftool`）。未インストールの場合は起動時に案内ダイアログが出て、スキャン・タグ付け機能がグレーアウトする
 
-## ビルドとインストール
+## インストール
+
+### ビルド済み.dmgを使う（おすすめ）
+
+[Releases](../../releases)から最新の`.dmg`をダウンロードし、開いたウィンドウで`NAICuller.app`を`Applications`へドラッグする。
+
+Apple Developer Program未登録のためad-hoc署名（自己署名）になっている。ダウンロードしたアプリは初回起動時にmacOSのGatekeeperが「壊れているため開けません」と表示することがあるが、これは未署名アプリに対する標準的な警告であり、アプリ自体が壊れているわけではない。以下のいずれかで起動できる。
+
+- Finderで`NAICuller.app`を**右クリック→「開く」**→表示されるダイアログで再度「開く」
+- またはターミナルで以下を実行してquarantine属性を外す
+
+```sh
+xattr -cr /Applications/NAICuller.app
+```
+
+### ソースからビルドする
 
 ```sh
 ./build.sh
@@ -77,6 +92,10 @@ open ~/Applications/NAICuller.app
 - `rm`コマンド文字列のクリップボードコピー補助は無し（「削除対象」タグの一括ゴミ箱移動で概ね代替可能）
 - FSEventsによるファイル変更の自動追従は無し（再スキャンは手動ボタンのみ）
 - App Store対応・Sandbox対応はしていない（個人ローカル利用のみを想定）
+
+## 謝辞
+
+プロンプトの読み取り・タグの書き込みには [ExifTool](https://exiftool.org/)（Phil Harvey氏作）を利用しています。NAICuller自体にはExifTool本体を同梱していません（各自`brew install exiftool`でインストールする前提）。
 
 ## ライセンス
 
