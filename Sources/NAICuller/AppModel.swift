@@ -23,7 +23,7 @@ final class AppModel: ObservableObject {
     private(set) var quickLookController: QuickLookController!
     private var exifToolService: ExifToolService?
     private var scanService: ScanService?
-    /// `~/Dev/tools/bg-splitter`（自分専用の背景透過+シート分割ツール）への窓口。
+    /// bg-splitter（自分専用の背景透過+シート分割ツール）への窓口。
     /// ExifToolと違い一般配布していないため、他のNAICullerユーザーの環境では
     /// 単に見つからず`bgSplitterAvailable=false`のままメニューがグレーアウトするだけで良い。
     private var bgSplitterService: BgSplitterService?
@@ -289,7 +289,7 @@ final class AppModel: ObservableObject {
     }
 
     /// bg-splitterの検出をやり直す（起動時、およびSettings画面でパスを変更/「再チェック」した時に呼ぶ）。
-    /// `bgSplitterCustomPath`が空なら既定の`~/Dev/tools/bg-splitter`を見る。
+    /// `bgSplitterCustomPath`が空なら既定パス（`BgSplitterService.locate`参照）を見る。
     func recheckBgSplitter() {
         let customRoot = bgSplitterCustomPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterCustomPath)
         guard let located = BgSplitterService.locate(customRoot: customRoot) else {

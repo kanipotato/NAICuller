@@ -46,7 +46,7 @@ public struct BgSplitterManifest: Codable, Sendable {
     }
 }
 
-/// `~/Dev/tools/bg-splitter`（背景透過+シート画像グリッド分割の自作Python CLI）を
+/// bg-splitter（背景透過+シート画像グリッド分割の自作Python CLI）を
 /// サブプロセスとして呼び出すラッパー。ExifToolServiceと違い、これは自分専用の
 /// 未公開ツールで`brew`等の一般配布はしていないため、他のNAICullerユーザーの環境では
 /// 見つからず`bgSplitterAvailable`がfalseのまま機能自体が非表示になるだけで、
@@ -66,7 +66,7 @@ public final class BgSplitterService {
     }
 
     /// `<root>/venv/bin/python3`と`<root>/bgsplit.py`が両方揃っているか確認する。
-    /// `customRoot`未指定時は`~/Dev/tools/bg-splitter`を見る（Settings画面で個別パスを
+    /// `customRoot`未指定時はホームディレクトリ配下の既定パスを見る（Settings画面で個別パスを
     /// 設定していない場合の既定値）。見つからなければnil（呼び出し側はbgSplitterAvailable=falseに
     /// して機能を非表示にする）。
     public static func locate(

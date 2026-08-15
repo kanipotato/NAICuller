@@ -241,7 +241,7 @@ private struct BgSplitterSettingsTab: View {
                 statusSection
 
                 HStack {
-                    TextField("bg-splitterのフォルダ（空欄で ~/Dev/tools/bg-splitter）", text: $pathText)
+                    TextField("bg-splitterのフォルダ（空欄で既定パスを使用）", text: $pathText)
                         .textFieldStyle(.roundedBorder)
                     Button("選択...") { choosePath() }
                     Button("再チェック") { applyPathAndRecheck() }
@@ -281,9 +281,9 @@ private struct BgSplitterSettingsTab: View {
         } else {
             Label("bg-splitterが見つからないよ", systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
-            Text("下のパスに無いか確認してね。まだセットアップしていない場合はターミナルで:")
+            Text("下のパスに無いか確認してね。まだセットアップしていない場合はbg-splitterのフォルダで:")
                 .font(.caption)
-            Text("cd ~/Dev/tools/bg-splitter\npython3 -m venv venv\n./venv/bin/pip install Pillow numpy onnxruntime \"rembg[cpu]\"")
+            Text("python3 -m venv venv\n./venv/bin/pip install Pillow numpy onnxruntime \"rembg[cpu]\"")
                 .font(.caption.monospaced())
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)

@@ -2,7 +2,7 @@ import XCTest
 @testable import NAICullerCore
 
 /// 実際にexiftoolをサブプロセスとして起動する結合テスト。
-/// `~/Dev/work/novelAI/tmp/`から実データ検証済みのNovelAI生成PNGをコピーした
+/// 実データ検証済みのNovelAI生成PNGをコピーした
 /// テスト固定資産（Fixtures/sample1.png 等）を使う。
 /// 実データ検証で確認済みの前提（詳細設計・冒頭のExifTool実データ検証結果）：
 /// - PNG:Descriptionにプロンプト本文がプレーンテキストで入っている
