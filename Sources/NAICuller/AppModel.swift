@@ -145,6 +145,29 @@ final class AppModel: ObservableObject {
 
     @Published private(set) var exifToolAvailable = false
     @Published private(set) var bgSplitterAvailable = false
+
+    // MARK: - bg-splitter設定（UserDefaultsに永続化。プラグイン扱いなのでDB(SQLite)ではなく
+    // アプリ設定として保存する。空文字列はそれぞれ「既定値を使う」を意味する）。
+
+    @Published var bgSplitterCustomPath: String {
+        didSet { UserDefaults.standard.set(bgSplitterCustomPath, forKey: DefaultsKey.bgSplitterCustomPath) }
+    }
+    @Published var bgSplitterDefaultModel: String {
+        didSet { UserDefaults.standard.set(bgSplitterDefaultModel, forKey: DefaultsKey.bgSplitterDefaultModel) }
+    }
+    @Published var bgSplitterRemoveOutputPath: String {
+        didSet { UserDefaults.standard.set(bgSplitterRemoveOutputPath, forKey: DefaultsKey.bgSplitterRemoveOutputPath) }
+    }
+    @Published var bgSplitterSplitOutputPath: String {
+        didSet { UserDefaults.standard.set(bgSplitterSplitOutputPath, forKey: DefaultsKey.bgSplitterSplitOutputPath) }
+    }
+    private enum DefaultsKey {
+        static let bgSplitterCustomPath = "bgSplitterCustomPath"
+        static let bgSplitterDefaultModel = "bgSplitterDefaultModel"
+        static let bgSplitterRemoveOutputPath = "bgSplitterRemoveOutputPath"
+        static let bgSplitterSplitOutputPath = "bgSplitterSplitOutputPath"
+    }
+
     @Published private(set) var isScanning = false
     @Published var toastMessage: String?
     @Published var pendingOrphans: [(id: Int64, path: String)] = []
@@ -185,6 +208,14 @@ final class AppModel: ObservableObject {
     // MARK: - 起動
 
     init() {
+        // 他のストアドプロパティと違いUserDefaults由来の値なので、メソッド呼び出しが
+        // 始まる前(=self未初期化完了の段階)にここで読み込んでおく必要がある。
+        let defaults = UserDefaults.standard
+        bgSplitterCustomPath = defaults.string(forKey: DefaultsKey.bgSplitterCustomPath) ?? ""
+        bgSplitterDefaultModel = defaults.string(forKey: DefaultsKey.bgSplitterDefaultModel) ?? BgSplitterModel.defaultModelId
+        bgSplitterRemoveOutputPath = defaults.string(forKey: DefaultsKey.bgSplitterRemoveOutputPath) ?? ""
+        bgSplitterSplitOutputPath = defaults.string(forKey: DefaultsKey.bgSplitterSplitOutputPath) ?? ""
+
         setUpDatabaseAndThumbnailCache()
         recheckExifTool()
         recheckBgSplitter()
@@ -240,10 +271,11 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// bg-splitterの検出をやり直す（起動時に1回呼ぶだけで十分だが、ExifToolに揃えて
-    /// 「再チェック」導線からも呼べるよう公開しておく）。
+    /// bg-splitterの検出をやり直す（起動時、およびSettings画面でパスを変更/「再チェック」した時に呼ぶ）。
+    /// `bgSplitterCustomPath`が空なら既定の`~/Dev/tools/bg-splitter`を見る。
     func recheckBgSplitter() {
-        guard let located = BgSplitterService.locate() else {
+        let customRoot = bgSplitterCustomPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterCustomPath)
+        guard let located = BgSplitterService.locate(customRoot: customRoot) else {
             bgSplitterAvailable = false
             bgSplitterService = nil
             return
@@ -797,19 +829,25 @@ final class AppModel: ObservableObject {
 
     // MARK: - bg-splitter連携（背景透過・シート分割）
 
-    /// 選択画像を背景透過する。出力は元画像と同じフォルダに`<元名>_nobg.png`として
-    /// 書き出されるだけで、DBへの取り込みは行わない（見たければ「再スキャン」してもらう。
-    /// 差分スキャンなので新規ファイル分だけ軽く取り込める）。
-    func removeBackground(for images: [ImageRecord]) {
-        runBgSplitterJob(kind: "remove", on: images) { service, path in
-            try service.removeBackground(imagePath: path)
+    /// 選択画像を背景透過する。`model`省略時はSettings画面で設定したデフォルトモデルを使う
+    /// （右クリックメニューの「モデルを指定」サブメニューから呼ぶ時だけ明示的に渡す）。
+    /// 出力先はSettings画面で指定していれば`bgSplitterRemoveOutputPath`、未指定なら
+    /// 元画像と同じフォルダに`<元名>_nobg.png`。DBへの取り込みは行わない（見たければ
+    /// 「再スキャン」してもらう。差分スキャンなので新規ファイル分だけ軽く取り込める）。
+    func removeBackground(for images: [ImageRecord], model: String? = nil) {
+        let resolvedModel = model ?? bgSplitterDefaultModel
+        let outputDir = bgSplitterRemoveOutputPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterRemoveOutputPath)
+        runBgSplitterJob(kind: "remove-\(resolvedModel)", on: images) { service, path in
+            try service.removeBackground(imagePath: path, model: resolvedModel, outputDirectory: outputDir)
         }
     }
 
-    /// 選択画像をグリッド分割+背景透過する。出力は`<元名>_split/`フォルダに書き出される。
-    func splitSheet(for images: [ImageRecord]) {
-        runBgSplitterJob(kind: "split", on: images) { service, path in
-            try service.splitSheet(imagePath: path)
+    /// 選択画像をグリッド分割+背景透過する。`model`/出力先の扱いは`removeBackground`と同様。
+    func splitSheet(for images: [ImageRecord], model: String? = nil) {
+        let resolvedModel = model ?? bgSplitterDefaultModel
+        let outputDir = bgSplitterSplitOutputPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterSplitOutputPath)
+        runBgSplitterJob(kind: "split-\(resolvedModel)", on: images) { service, path in
+            try service.splitSheet(imagePath: path, model: resolvedModel, outputDirectory: outputDir)
         }
     }
 
@@ -820,7 +858,7 @@ final class AppModel: ObservableObject {
     ) {
         guard !images.isEmpty else { return }
         guard let bgSplitterService else {
-            presentAlert(message: "bg-splitterが見つからない", informative: "~/Dev/tools/bg-splitter にvenvとbgsplit.pyがセットアップされているか確認してください")
+            presentAlert(message: "bg-splitterが見つからない", informative: "設定画面の「背景透過・シート分割」タブでパスを確認してください")
             return
         }
         let keys = images.map { "\($0.id)-\(kind)" }

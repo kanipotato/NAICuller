@@ -291,24 +291,60 @@ struct ThumbnailGridView: NSViewRepresentable {
             // このセクション自体が表示されない（グレーアウトではなく非表示にしている）。
             if appModel.bgSplitterAvailable {
                 menu.addItem(.separator())
+                let imageIds = targets.map(\.id)
+
                 let removeBgTitle = targets.count > 1 ? "選択中の\(targets.count)件を背景透過" : "背景透過"
                 let removeBgItem = NSMenuItem(title: removeBgTitle, action: #selector(removeBackgroundFromMenu(_:)), keyEquivalent: "")
                 removeBgItem.target = self
-                removeBgItem.representedObject = targets.map(\.id)
+                removeBgItem.representedObject = BgSplitterMenuAction(imageIds: imageIds, model: nil)
                 menu.addItem(removeBgItem)
+                menu.addItem(bgSplitterModelSubmenuItem(
+                    title: "背景透過（モデルを指定）",
+                    imageIds: imageIds,
+                    action: #selector(removeBackgroundFromMenu(_:))
+                ))
 
                 let splitTitle = targets.count > 1 ? "選択中の\(targets.count)件をシート分割" : "シート分割(グリッド自動検出)"
                 let splitItem = NSMenuItem(title: splitTitle, action: #selector(splitSheetFromMenu(_:)), keyEquivalent: "")
                 splitItem.target = self
-                splitItem.representedObject = targets.map(\.id)
+                splitItem.representedObject = BgSplitterMenuAction(imageIds: imageIds, model: nil)
                 menu.addItem(splitItem)
+                menu.addItem(bgSplitterModelSubmenuItem(
+                    title: "シート分割（モデルを指定）",
+                    imageIds: imageIds,
+                    action: #selector(splitSheetFromMenu(_:))
+                ))
             }
             return menu
+        }
+
+        /// 「モデルを指定」サブメニュー（u2net/isnet-anime等を並べる）を組み立てる。
+        /// 背景透過・シート分割の両方で同じ構造なので共通化している。
+        private func bgSplitterModelSubmenuItem(title: String, imageIds: [Int64], action: Selector) -> NSMenuItem {
+            let submenu = NSMenu()
+            for model in BgSplitterModel.all {
+                let item = NSMenuItem(title: model.displayName, action: action, keyEquivalent: "")
+                item.target = self
+                item.representedObject = BgSplitterMenuAction(imageIds: imageIds, model: model.id)
+                item.toolTip = model.usageHint
+                submenu.addItem(item)
+            }
+            let submenuItem = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            submenuItem.submenu = submenu
+            return submenuItem
         }
 
         private struct MenuTagAction {
             let imageIds: [Int64]
             let tagId: Int64
+        }
+
+        /// 背景透過/シート分割メニューのrepresentedObject。`model`がnilならAppModel側の
+        /// デフォルトモデル（Settings画面で設定）を使う。「モデルを指定」サブメニューから
+        /// 呼ばれた時だけ具体的なmodel idが入る。
+        private struct BgSplitterMenuAction {
+            let imageIds: [Int64]
+            let model: String?
         }
 
         @objc private func showQuickLookFromMenu(_ sender: NSMenuItem) {
@@ -342,17 +378,17 @@ struct ThumbnailGridView: NSViewRepresentable {
         }
 
         @objc private func removeBackgroundFromMenu(_ sender: NSMenuItem) {
-            guard let imageIds = sender.representedObject as? [Int64] else { return }
-            let targetImages = images.filter { imageIds.contains($0.id) }
+            guard let action = sender.representedObject as? BgSplitterMenuAction else { return }
+            let targetImages = images.filter { action.imageIds.contains($0.id) }
             guard !targetImages.isEmpty else { return }
-            parent.appModel.removeBackground(for: targetImages)
+            parent.appModel.removeBackground(for: targetImages, model: action.model)
         }
 
         @objc private func splitSheetFromMenu(_ sender: NSMenuItem) {
-            guard let imageIds = sender.representedObject as? [Int64] else { return }
-            let targetImages = images.filter { imageIds.contains($0.id) }
+            guard let action = sender.representedObject as? BgSplitterMenuAction else { return }
+            let targetImages = images.filter { action.imageIds.contains($0.id) }
             guard !targetImages.isEmpty else { return }
-            parent.appModel.splitSheet(for: targetImages)
+            parent.appModel.splitSheet(for: targetImages, model: action.model)
         }
 
         // MARK: - サムネイル読み込み（表示直前の遅延生成。詳細設計 0章）

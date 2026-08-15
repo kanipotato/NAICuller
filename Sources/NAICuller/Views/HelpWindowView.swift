@@ -45,6 +45,24 @@ struct HelpWindowView: View {
                 Divider()
 
                 VStack(alignment: .leading, spacing: 10) {
+                    Text("背景透過・シート分割（bg-splitterプラグイン）").font(.headline)
+                    Text("自分専用の外部ツール「bg-splitter」（~/Dev/tools/bg-splitter）が入っている時だけ、右クリックメニューに「背景透過」「シート分割」が出るよ。設定画面の「背景透過・分割」タブでパス・デフォルトモデル・出力先を設定できる。")
+                        .font(.callout)
+                    Text("選べるモデル")
+                        .font(.subheadline.bold())
+                    ForEach(BgSplitterModel.all) { model in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(model.displayName).font(.callout.bold())
+                            Text(model.usageHint)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 10) {
                     Text("キーボードショートカット").font(.headline)
                     ShortcutsListContent()
                 }
