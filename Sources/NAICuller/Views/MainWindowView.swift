@@ -78,6 +78,12 @@ struct MainWindowView: View {
         } message: {
             Text("「削除対象」タグが付いた画像\(appModel.pendingDeletionCount)件をゴミ箱へ移動します。ゴミ箱からは復元できます。")
         }
+        // シート分割のやり直し（余白調整）。isPresented形式のalertだとスライダーを置けないので、
+        // 他のモーダルと違いここだけ.sheet(item:)にしている。
+        .sheet(item: $appModel.pendingSplitRedo) { request in
+            SplitRedoSheetView(request: request)
+                .environmentObject(appModel)
+        }
     }
 
     @ToolbarContentBuilder

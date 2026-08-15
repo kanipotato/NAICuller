@@ -21,6 +21,31 @@ public extension BgSplitterModel {
     static let defaultModelId = "isnet-anime"
 }
 
+/// `bgsplit.py split`が出力フォルダに書き出す`<元名>_manifest.json`の中身。
+/// 元シートの絶対パス・使用モデル・overflow等を記録しており、「この分割をやり直す」機能が
+/// 元シート特定とパラメータ復元に使う。出力先が複数の元シートの結果を集める共通フォルダでも、
+/// セルのファイル名(`<元名>_r{行}_c{列}.png`)から`<元名>_manifest.json`を一意に導ける。
+public struct BgSplitterManifestCell: Codable, Sendable {
+    public let row: Int
+    public let col: Int
+    public let file: String
+}
+
+public struct BgSplitterManifest: Codable, Sendable {
+    public let source: String
+    public let model: String
+    public let overflow: Double
+    public let pad: Int
+    public let alphaThreshold: Int
+    public let cells: [BgSplitterManifestCell]
+
+    enum CodingKeys: String, CodingKey {
+        case source, model, overflow, pad
+        case alphaThreshold = "alpha_threshold"
+        case cells
+    }
+}
+
 /// `~/Dev/tools/bg-splitter`（背景透過+シート画像グリッド分割の自作Python CLI）を
 /// サブプロセスとして呼び出すラッパー。ExifToolServiceと違い、これは自分専用の
 /// 未公開ツールで`brew`等の一般配布はしていないため、他のNAICullerユーザーの環境では
@@ -59,6 +84,26 @@ public final class BgSplitterService {
         return (python, script)
     }
 
+    /// ファイル名が分割セルの命名規則(`<元名>_r{行}_c{列}.png`)に一致するか調べ、一致すれば
+    /// `<元名>`部分を返す。「この分割をやり直す」メニューを出すかどうかの一次判定に使う。
+    public static func splitCellStem(fromFileName fileName: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: #"^(.+)_r\d+_c\d+\.png$"#) else { return nil }
+        let range = NSRange(fileName.startIndex..., in: fileName)
+        guard let match = regex.firstMatch(in: fileName, range: range),
+              let stemRange = Range(match.range(at: 1), in: fileName) else { return nil }
+        return String(fileName[stemRange])
+    }
+
+    /// 分割セル画像のパスから、同じフォルダにある対応マニフェスト(`<元名>_manifest.json`)を読む。
+    /// ファイル名が分割セルの規則に合わない、またはマニフェストが無い/壊れている場合はnil。
+    public static func readManifest(forCellImagePath imagePath: String, fileManager: FileManager = .default) -> BgSplitterManifest? {
+        let url = URL(fileURLWithPath: imagePath)
+        guard let stem = splitCellStem(fromFileName: url.lastPathComponent) else { return nil }
+        let manifestURL = url.deletingLastPathComponent().appendingPathComponent("\(stem)_manifest.json")
+        guard let data = fileManager.contents(atPath: manifestURL.path) else { return nil }
+        return try? JSONDecoder().decode(BgSplitterManifest.self, from: data)
+    }
+
     /// 背景透過を実行する。`outputDirectory`未指定時は`bgsplit.py`側の既定命名規則
     /// （`<元ファイル名>_nobg.png`を元画像と同じフォルダに書き出す）を再現する形で
     /// こちら側で出力パスを組み立て、`-o`に明示的に渡す（bgsplit.py単体では省略時に
@@ -80,13 +125,14 @@ public final class BgSplitterService {
     /// `bgsplit.py`側の既定命名規則（`<元ファイル名>_split/`フォルダを元画像と同じ場所に作る）
     /// に従うパスを組み立てて`-o`に渡す。
     @discardableResult
-    public func splitSheet(imagePath: String, model: String? = nil, outputDirectory: URL? = nil) throws -> String {
+    public func splitSheet(imagePath: String, model: String? = nil, outputDirectory: URL? = nil, overflow: Double? = nil) throws -> String {
         let url = URL(fileURLWithPath: imagePath)
         let stem = url.deletingPathExtension().lastPathComponent
         let outputDir = outputDirectory ?? url.deletingLastPathComponent().appendingPathComponent("\(stem)_split")
 
         var args = ["split", imagePath, "-o", outputDir.path]
         if let model { args += ["-m", model] }
+        if let overflow { args += ["--overflow", String(overflow)] }
         try run(args)
         return outputDir.path
     }

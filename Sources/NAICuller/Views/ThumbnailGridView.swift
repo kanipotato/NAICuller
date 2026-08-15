@@ -314,6 +314,15 @@ struct ThumbnailGridView: NSViewRepresentable {
                     imageIds: imageIds,
                     action: #selector(splitSheetFromMenu(_:))
                 ))
+
+                // このセル自体が分割済みファイル（<元名>_r{行}_c{列}.png）らしい時だけ、
+                // 「やり直す」を出す。複数選択だと元シートが揃わない可能性があるので単一選択限定。
+                if targets.count == 1, BgSplitterService.splitCellStem(fromFileName: targets[0].url.lastPathComponent) != nil {
+                    let redoItem = NSMenuItem(title: "この分割をやり直す（余白調整）...", action: #selector(redoSplitFromMenu(_:)), keyEquivalent: "")
+                    redoItem.target = self
+                    redoItem.representedObject = targets[0].id
+                    menu.addItem(redoItem)
+                }
             }
             return menu
         }
@@ -389,6 +398,12 @@ struct ThumbnailGridView: NSViewRepresentable {
             let targetImages = images.filter { action.imageIds.contains($0.id) }
             guard !targetImages.isEmpty else { return }
             parent.appModel.splitSheet(for: targetImages, model: action.model)
+        }
+
+        @objc private func redoSplitFromMenu(_ sender: NSMenuItem) {
+            guard let imageId = sender.representedObject as? Int64,
+                  let image = images.first(where: { $0.id == imageId }) else { return }
+            parent.appModel.requestSplitRedo(for: image)
         }
 
         // MARK: - サムネイル読み込み（表示直前の遅延生成。詳細設計 0章）

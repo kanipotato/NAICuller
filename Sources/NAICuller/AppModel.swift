@@ -182,6 +182,15 @@ final class AppModel: ObservableObject {
     @Published var pendingDeletionScope: DeletionScope?
     @Published private(set) var pendingDeletionCount: Int = 0
 
+    /// 「この分割をやり直す」の確認シートに渡す下ごしらえ。マニフェストを読めた時だけ
+    /// nil以外になり、シートのスライダーはこの`manifest.overflow`（前回使った値）を初期値にする。
+    struct SplitRedoRequest: Identifiable {
+        let id = UUID()
+        let cellImage: ImageRecord
+        let manifest: BgSplitterManifest
+    }
+    @Published var pendingSplitRedo: SplitRedoRequest?
+
     private var toastDismissTask: Task<Void, Never>?
     private var searchDebounceTask: Task<Void, Never>?
     /// プロンプト候補分析の進行中タスク。コードレビュー指摘の修正：多重起動のガードが無く、
@@ -848,6 +857,53 @@ final class AppModel: ObservableObject {
         let outputDir = bgSplitterSplitOutputPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterSplitOutputPath)
         runBgSplitterJob(kind: "split-\(resolvedModel)", on: images) { service, path in
             try service.splitSheet(imagePath: path, model: resolvedModel, outputDirectory: outputDir)
+        }
+    }
+
+    // MARK: - 分割のやり直し（余白調整）
+
+    /// 右クリックされた画像が分割セルらしければマニフェストを読み、確認シートを出す準備をする。
+    /// 分割セルでない/マニフェストが読めない場合はメニュー自体を出さない設計なので
+    /// （`bgSplitterAvailable`と同様、ThumbnailGridView側で先にチェック済み）、
+    /// ここに来て読めなかった場合は「ファイルが移動された」等の想定外ケースとしてアラートを出す。
+    func requestSplitRedo(for image: ImageRecord) {
+        guard let manifest = BgSplitterService.readManifest(forCellImagePath: image.path) else {
+            presentAlert(message: "分割時の情報が見つからない", informative: "マニフェスト(_manifest.json)が同じフォルダに無いか、壊れているみたい。元シートから改めて「シート分割」してね。")
+            return
+        }
+        pendingSplitRedo = SplitRedoRequest(cellImage: image, manifest: manifest)
+    }
+
+    func cancelSplitRedo() {
+        pendingSplitRedo = nil
+    }
+
+    /// `overflow`を指定してマニフェスト記載の元シートを再分割する。出力先は今見ているセルと
+    /// 同じフォルダ（＝前回の分割結果と同じ場所）なので、同名セルは上書きされる。
+    func confirmSplitRedo(overflow: Double) {
+        guard let request = pendingSplitRedo else { return }
+        pendingSplitRedo = nil
+        guard let bgSplitterService else {
+            presentAlert(message: "bg-splitterが見つからない", informative: "設定画面の「背景透過・シート分割」タブでパスを確認してください")
+            return
+        }
+        let outputDir = URL(fileURLWithPath: request.cellImage.path).deletingLastPathComponent()
+        let sourcePath = request.manifest.source
+        let model = request.manifest.model
+        showToast("再分割中…")
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard self != nil else { return }
+            do {
+                _ = try bgSplitterService.splitSheet(imagePath: sourcePath, model: model, outputDirectory: outputDir, overflow: overflow)
+                await MainActor.run { [weak self] in
+                    self?.showToast("再分割が完了しました")
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.presentAlert(message: "再分割に失敗した", informative: "\(error)")
+                }
+            }
         }
     }
 
