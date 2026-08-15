@@ -253,6 +253,11 @@ private struct BgSplitterSettingsTab: View {
                     Divider()
                     OutputPathRow(title: "背景透過の出力先", path: $appModel.bgSplitterRemoveOutputPath)
                     OutputPathRow(title: "シート分割の出力先", path: $appModel.bgSplitterSplitOutputPath)
+                    Divider()
+                    OutputPathRow(title: "分割履歴(マニフェスト)の保存先", path: $appModel.bgSplitterManifestPath)
+                    Text("空欄だとシート分割の出力先ごとに小さいJSONファイル(<元名>_manifest.json)が溜まっていくよ。「この分割をやり直す」機能が使う元シートの記録なので、たくさん処理してファイルが増えてきたら、ここで専用フォルダにまとめて後で確認・削除しやすくできるよ。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             .padding()

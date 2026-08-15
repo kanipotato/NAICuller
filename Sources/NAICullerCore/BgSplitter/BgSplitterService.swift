@@ -94,14 +94,26 @@ public final class BgSplitterService {
         return String(fileName[stemRange])
     }
 
-    /// 分割セル画像のパスから、同じフォルダにある対応マニフェスト(`<元名>_manifest.json`)を読む。
-    /// ファイル名が分割セルの規則に合わない、またはマニフェストが無い/壊れている場合はnil。
-    public static func readManifest(forCellImagePath imagePath: String, fileManager: FileManager = .default) -> BgSplitterManifest? {
+    /// 分割セル画像のパスから対応マニフェスト(`<元名>_manifest.json`)を読む。
+    /// `manifestDirectory`が指定されていればまずそこを見て、無ければセルと同じフォルダを見る
+    /// （`--manifest-dir`を指定せずに書かれた古いマニフェストとの後方互換のため）。
+    /// ファイル名が分割セルの規則に合わない、またはどちらにもマニフェストが無い/壊れている場合はnil。
+    public static func readManifest(
+        forCellImagePath imagePath: String,
+        manifestDirectory: URL? = nil,
+        fileManager: FileManager = .default
+    ) -> BgSplitterManifest? {
         let url = URL(fileURLWithPath: imagePath)
         guard let stem = splitCellStem(fromFileName: url.lastPathComponent) else { return nil }
-        let manifestURL = url.deletingLastPathComponent().appendingPathComponent("\(stem)_manifest.json")
-        guard let data = fileManager.contents(atPath: manifestURL.path) else { return nil }
-        return try? JSONDecoder().decode(BgSplitterManifest.self, from: data)
+        let candidates = [manifestDirectory, url.deletingLastPathComponent()].compactMap { $0 }
+        for dir in candidates {
+            let manifestURL = dir.appendingPathComponent("\(stem)_manifest.json")
+            if let data = fileManager.contents(atPath: manifestURL.path),
+               let manifest = try? JSONDecoder().decode(BgSplitterManifest.self, from: data) {
+                return manifest
+            }
+        }
+        return nil
     }
 
     /// 背景透過を実行する。`outputDirectory`未指定時は`bgsplit.py`側の既定命名規則
@@ -125,7 +137,13 @@ public final class BgSplitterService {
     /// `bgsplit.py`側の既定命名規則（`<元ファイル名>_split/`フォルダを元画像と同じ場所に作る）
     /// に従うパスを組み立てて`-o`に渡す。
     @discardableResult
-    public func splitSheet(imagePath: String, model: String? = nil, outputDirectory: URL? = nil, overflow: Double? = nil) throws -> String {
+    public func splitSheet(
+        imagePath: String,
+        model: String? = nil,
+        outputDirectory: URL? = nil,
+        overflow: Double? = nil,
+        manifestDirectory: URL? = nil
+    ) throws -> String {
         let url = URL(fileURLWithPath: imagePath)
         let stem = url.deletingPathExtension().lastPathComponent
         let outputDir = outputDirectory ?? url.deletingLastPathComponent().appendingPathComponent("\(stem)_split")
@@ -133,6 +151,7 @@ public final class BgSplitterService {
         var args = ["split", imagePath, "-o", outputDir.path]
         if let model { args += ["-m", model] }
         if let overflow { args += ["--overflow", String(overflow)] }
+        if let manifestDirectory { args += ["--manifest-dir", manifestDirectory.path] }
         try run(args)
         return outputDir.path
     }

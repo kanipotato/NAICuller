@@ -58,6 +58,13 @@ struct HelpWindowView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+
+                    Text("⚠️ 「この分割をやり直す」について")
+                        .font(.subheadline.bold())
+                        .padding(.top, 4)
+                    Text("分割セルには「どの元シートから、どのモデル・余白設定で切り出したか」を記録したマニフェスト(_manifest.json)が付いている。分割した**後で元シートのファイル名を変更・移動すると、マニフェストが古いパスを指したままになり「この分割をやり直す」が失敗する**（分割セル自体は残るので実害はないが、やり直したい時は元シートから改めて「シート分割」し直してね）。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Divider()

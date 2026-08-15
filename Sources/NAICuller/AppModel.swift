@@ -161,11 +161,18 @@ final class AppModel: ObservableObject {
     @Published var bgSplitterSplitOutputPath: String {
         didSet { UserDefaults.standard.set(bgSplitterSplitOutputPath, forKey: DefaultsKey.bgSplitterSplitOutputPath) }
     }
+    /// 分割マニフェスト(`<元名>_manifest.json`)の保存先。空なら分割出力フォルダと同じ場所
+    /// （bgsplit.py側の既定）。処理枚数が増えるとマニフェストが分割結果と同じ数だけ
+    /// ライブラリ内に散らばるため、専用フォルダに集約して手動で見に行きたい場合に指定する。
+    @Published var bgSplitterManifestPath: String {
+        didSet { UserDefaults.standard.set(bgSplitterManifestPath, forKey: DefaultsKey.bgSplitterManifestPath) }
+    }
     private enum DefaultsKey {
         static let bgSplitterCustomPath = "bgSplitterCustomPath"
         static let bgSplitterDefaultModel = "bgSplitterDefaultModel"
         static let bgSplitterRemoveOutputPath = "bgSplitterRemoveOutputPath"
         static let bgSplitterSplitOutputPath = "bgSplitterSplitOutputPath"
+        static let bgSplitterManifestPath = "bgSplitterManifestPath"
     }
 
     @Published private(set) var isScanning = false
@@ -224,6 +231,7 @@ final class AppModel: ObservableObject {
         bgSplitterDefaultModel = defaults.string(forKey: DefaultsKey.bgSplitterDefaultModel) ?? BgSplitterModel.defaultModelId
         bgSplitterRemoveOutputPath = defaults.string(forKey: DefaultsKey.bgSplitterRemoveOutputPath) ?? ""
         bgSplitterSplitOutputPath = defaults.string(forKey: DefaultsKey.bgSplitterSplitOutputPath) ?? ""
+        bgSplitterManifestPath = defaults.string(forKey: DefaultsKey.bgSplitterManifestPath) ?? ""
 
         setUpDatabaseAndThumbnailCache()
         recheckExifTool()
@@ -852,11 +860,13 @@ final class AppModel: ObservableObject {
     }
 
     /// 選択画像をグリッド分割+背景透過する。`model`/出力先の扱いは`removeBackground`と同様。
+    /// マニフェストの保存先は`bgSplitterManifestPath`が空なら分割出力フォルダと同じ場所になる。
     func splitSheet(for images: [ImageRecord], model: String? = nil) {
         let resolvedModel = model ?? bgSplitterDefaultModel
         let outputDir = bgSplitterSplitOutputPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterSplitOutputPath)
+        let manifestDir = bgSplitterManifestPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterManifestPath)
         runBgSplitterJob(kind: "split-\(resolvedModel)", on: images) { service, path in
-            try service.splitSheet(imagePath: path, model: resolvedModel, outputDirectory: outputDir)
+            try service.splitSheet(imagePath: path, model: resolvedModel, outputDirectory: outputDir, manifestDirectory: manifestDir)
         }
     }
 
@@ -866,9 +876,12 @@ final class AppModel: ObservableObject {
     /// 分割セルでない/マニフェストが読めない場合はメニュー自体を出さない設計なので
     /// （`bgSplitterAvailable`と同様、ThumbnailGridView側で先にチェック済み）、
     /// ここに来て読めなかった場合は「ファイルが移動された」等の想定外ケースとしてアラートを出す。
+    /// マニフェストの探索先は`bgSplitterManifestPath`優先、無ければセルと同じフォルダ
+    /// （`readManifest`側で後方互換フォールバック済み）。
     func requestSplitRedo(for image: ImageRecord) {
-        guard let manifest = BgSplitterService.readManifest(forCellImagePath: image.path) else {
-            presentAlert(message: "分割時の情報が見つからない", informative: "マニフェスト(_manifest.json)が同じフォルダに無いか、壊れているみたい。元シートから改めて「シート分割」してね。")
+        let manifestDir = bgSplitterManifestPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterManifestPath)
+        guard let manifest = BgSplitterService.readManifest(forCellImagePath: image.path, manifestDirectory: manifestDir) else {
+            presentAlert(message: "分割時の情報が見つからない", informative: "マニフェスト(_manifest.json)が見つからないか、壊れているみたい。元ファイル名を変更していないか・保存先の設定を確認して、それでもダメなら元シートから改めて「シート分割」してね。")
             return
         }
         pendingSplitRedo = SplitRedoRequest(cellImage: image, manifest: manifest)
@@ -888,6 +901,7 @@ final class AppModel: ObservableObject {
             return
         }
         let outputDir = URL(fileURLWithPath: request.cellImage.path).deletingLastPathComponent()
+        let manifestDir = bgSplitterManifestPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterManifestPath)
         let sourcePath = request.manifest.source
         let model = request.manifest.model
         showToast("再分割中…")
@@ -895,7 +909,10 @@ final class AppModel: ObservableObject {
         Task.detached(priority: .userInitiated) { [weak self] in
             guard self != nil else { return }
             do {
-                _ = try bgSplitterService.splitSheet(imagePath: sourcePath, model: model, outputDirectory: outputDir, overflow: overflow)
+                _ = try bgSplitterService.splitSheet(
+                    imagePath: sourcePath, model: model, outputDirectory: outputDir,
+                    overflow: overflow, manifestDirectory: manifestDir
+                )
                 await MainActor.run { [weak self] in
                     self?.showToast("再分割が完了しました")
                 }
