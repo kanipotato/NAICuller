@@ -851,10 +851,14 @@ final class AppModel: ObservableObject {
     /// 出力先はSettings画面で指定していれば`bgSplitterRemoveOutputPath`、未指定なら
     /// 元画像と同じフォルダに`<元名>_nobg.png`。DBへの取り込みは行わない（見たければ
     /// 「再スキャン」してもらう。差分スキャンなので新規ファイル分だけ軽く取り込める）。
+    /// コードレビュー指摘の修正：以前は`kind`に`resolvedModel`を含めていたため、同じ画像に対して
+    /// 異なるモデルで背景透過を連続実行すると別々のガードキーとして扱われ、2プロセスが同じ
+    /// `<元名>_nobg.png`へ並行書き込みして壊れうる不具合があった。出力パスはモデルに依らず
+    /// 同一なので、ガードも画像単位（モデル非依存）にする。
     func removeBackground(for images: [ImageRecord], model: String? = nil) {
         let resolvedModel = model ?? bgSplitterDefaultModel
         let outputDir = bgSplitterRemoveOutputPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterRemoveOutputPath)
-        runBgSplitterJob(kind: "remove-\(resolvedModel)", on: images) { service, path in
+        runBgSplitterJob(kind: "remove", on: images) { service, path in
             try service.removeBackground(imagePath: path, model: resolvedModel, outputDirectory: outputDir)
         }
     }
@@ -865,7 +869,7 @@ final class AppModel: ObservableObject {
         let resolvedModel = model ?? bgSplitterDefaultModel
         let outputDir = bgSplitterSplitOutputPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterSplitOutputPath)
         let manifestDir = bgSplitterManifestPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterManifestPath)
-        runBgSplitterJob(kind: "split-\(resolvedModel)", on: images) { service, path in
+        runBgSplitterJob(kind: "split", on: images) { service, path in
             try service.splitSheet(imagePath: path, model: resolvedModel, outputDirectory: outputDir, manifestDirectory: manifestDir)
         }
     }
@@ -893,6 +897,12 @@ final class AppModel: ObservableObject {
 
     /// `overflow`を指定してマニフェスト記載の元シートを再分割する。出力先は今見ているセルと
     /// 同じフォルダ（＝前回の分割結果と同じ場所）なので、同名セルは上書きされる。
+    ///
+    /// コードレビュー指摘の修正：以前は`runBgSplitterJob`と違いガードを一切通していなかったため、
+    /// 同じ元シートから切り出された兄弟セル（例: r0_c0とr0_c1）から続けて「やり直す」を実行すると
+    /// 2つの再分割プロセスが同じ出力フォルダ・同じマニフェストへ並行書き込みしうる不具合があった。
+    /// キーは対象セルのIDではなく出力フォルダのパスにする（どのセルから起動しても同じ出力先に
+    /// 書き込む以上、フォルダ単位で排他すべきなため）。
     func confirmSplitRedo(overflow: Double) {
         guard let request = pendingSplitRedo else { return }
         pendingSplitRedo = nil
@@ -904,6 +914,12 @@ final class AppModel: ObservableObject {
         let manifestDir = bgSplitterManifestPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterManifestPath)
         let sourcePath = request.manifest.source
         let model = request.manifest.model
+
+        let jobKey = "split-redo-\(outputDir.path)"
+        guard inFlightBgSplitterJobs.insert(jobKey).inserted else {
+            presentAlert(message: "すでに再分割中みたい", informative: "完了を待ってからもう一度試してね。")
+            return
+        }
         showToast("再分割中…")
 
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -914,10 +930,12 @@ final class AppModel: ObservableObject {
                     overflow: overflow, manifestDirectory: manifestDir
                 )
                 await MainActor.run { [weak self] in
+                    self?.inFlightBgSplitterJobs.remove(jobKey)
                     self?.showToast("再分割が完了しました")
                 }
             } catch {
                 await MainActor.run { [weak self] in
+                    self?.inFlightBgSplitterJobs.remove(jobKey)
                     self?.presentAlert(message: "再分割に失敗した", informative: "\(error)")
                 }
             }
@@ -934,11 +952,17 @@ final class AppModel: ObservableObject {
             presentAlert(message: "bg-splitterが見つからない", informative: "設定画面の「背景透過・シート分割」タブでパスを確認してください")
             return
         }
-        let keys = images.map { "\($0.id)-\(kind)" }
-        guard keys.allSatisfy({ !inFlightBgSplitterJobs.contains($0) }) else { return }
+        // コードレビュー指摘の修正：以前は選択の1件でも実行中だと`allSatisfy`がfalseになり、
+        // バッチ全体（未処理の残り）が何のフィードバックもなく丸ごと無視されていた。
+        // 実行中でないものだけに絞って処理を続行する。
+        let targets = images.filter { !inFlightBgSplitterJobs.contains("\($0.id)-\(kind)") }
+        guard !targets.isEmpty else {
+            showToast("すでに処理中だよ")
+            return
+        }
+        let keys = targets.map { "\($0.id)-\(kind)" }
         inFlightBgSplitterJobs.formUnion(keys)
 
-        let targets = images
         showToast(targets.count > 1 ? "\(targets.count)件を処理中…" : "処理中…")
 
         Task.detached(priority: .userInitiated) { [weak self] in

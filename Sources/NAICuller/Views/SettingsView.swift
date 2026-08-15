@@ -263,6 +263,14 @@ private struct BgSplitterSettingsTab: View {
             .padding()
         }
         .onAppear { pathText = appModel.bgSplitterCustomPath }
+        // コードレビュー指摘の修正：以前は「選択...」か「再チェック」を押した時だけ
+        // appModelへ反映していたため、手入力しただけで設定画面を閉じると入力が
+        // 跡形もなく消えていた（他の出力先欄はappModelへ直接バインドしていて即時保存
+        // されるのに、ここだけ挙動が違っていた）。入力のたびに永続化だけは行い、
+        // 実際のパス再検出（ディスクアクセス）は「再チェック」ボタンでのみ行う。
+        .onChange(of: pathText) { newValue in
+            appModel.bgSplitterCustomPath = newValue
+        }
     }
 
     @ViewBuilder

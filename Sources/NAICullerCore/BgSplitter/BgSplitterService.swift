@@ -184,6 +184,15 @@ public final class BgSplitterService {
         }
         process.waitUntilExit()
         stderrPipe.fileHandleForReading.readabilityHandler = nil
+        // コードレビュー指摘の修正：readabilityHandlerの最後の発火は非同期で届くため、
+        // waitUntilExit()直後にnilにするだけだと、まだ配送されていない末尾チャンクを
+        // 取りこぼし、失敗時のエラーメッセージが空になることがあった。子プロセスは
+        // 既に終了しているので、ここでEOFまで同期的に読み切ってもデッドロックの
+        // 心配はない（デッドロックが起きるのは実行中に読まず待ち続けるケースのみ）。
+        let remainingStderr = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        if !remainingStderr.isEmpty {
+            stderrQueue.sync { stderrData.append(remainingStderr) }
+        }
 
         guard process.terminationStatus == 0 else {
             let errText = stderrQueue.sync { String(data: stderrData, encoding: .utf8) }?
