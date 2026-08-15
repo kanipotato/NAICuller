@@ -23,6 +23,10 @@ final class AppModel: ObservableObject {
     private(set) var quickLookController: QuickLookController!
     private var exifToolService: ExifToolService?
     private var scanService: ScanService?
+    /// `~/Dev/tools/bg-splitter`（自分専用の背景透過+シート分割ツール）への窓口。
+    /// ExifToolと違い一般配布していないため、他のNAICullerユーザーの環境では
+    /// 単に見つからず`bgSplitterAvailable=false`のままメニューがグレーアウトするだけで良い。
+    private var bgSplitterService: BgSplitterService?
 
     /// 固定表示ウィンドウを開くためのブリッジ。SwiftUIの`openWindow`環境アクションは
     /// View（今回は`NAICullerApp`自身）でしか取得できないため、AppKit側の右クリック
@@ -140,6 +144,7 @@ final class AppModel: ObservableObject {
     @Published var thumbnailSize: ThumbnailSize = .medium
 
     @Published private(set) var exifToolAvailable = false
+    @Published private(set) var bgSplitterAvailable = false
     @Published private(set) var isScanning = false
     @Published var toastMessage: String?
     @Published var pendingOrphans: [(id: Int64, path: String)] = []
@@ -173,12 +178,16 @@ final class AppModel: ObservableObject {
     /// 1回目の完了を待たずに2回目が同じ`currentlyTagged`スナップショットを読んでしまい、
     /// add/removeが二重に走りうる）。キーは"\(imageId)-\(tagId)"。
     private var inFlightToggles: Set<String> = []
+    /// bg-splitterの背景透過/シート分割が(画像, 種別)単位で二重起動しないためのガード。
+    /// キーは"\(imageId)-remove"または"\(imageId)-split"。
+    private var inFlightBgSplitterJobs: Set<String> = []
 
     // MARK: - 起動
 
     init() {
         setUpDatabaseAndThumbnailCache()
         recheckExifTool()
+        recheckBgSplitter()
         reloadAll()
         quickLookController = QuickLookController(appModel: self)
     }
@@ -229,6 +238,18 @@ final class AppModel: ObservableObject {
             exifToolService = nil
             scanService = nil
         }
+    }
+
+    /// bg-splitterの検出をやり直す（起動時に1回呼ぶだけで十分だが、ExifToolに揃えて
+    /// 「再チェック」導線からも呼べるよう公開しておく）。
+    func recheckBgSplitter() {
+        guard let located = BgSplitterService.locate() else {
+            bgSplitterAvailable = false
+            bgSplitterService = nil
+            return
+        }
+        bgSplitterService = BgSplitterService(pythonExecutableURL: located.python, scriptURL: located.script)
+        bgSplitterAvailable = true
     }
 
     // MARK: - 再読み込み
@@ -771,6 +792,72 @@ final class AppModel: ObservableObject {
             showToast("\(images.count)件をエクスポートしました")
         } catch {
             presentAlert(message: "エクスポートに失敗した", informative: "\(error)")
+        }
+    }
+
+    // MARK: - bg-splitter連携（背景透過・シート分割）
+
+    /// 選択画像を背景透過する。出力は元画像と同じフォルダに`<元名>_nobg.png`として
+    /// 書き出されるだけで、DBへの取り込みは行わない（見たければ「再スキャン」してもらう。
+    /// 差分スキャンなので新規ファイル分だけ軽く取り込める）。
+    func removeBackground(for images: [ImageRecord]) {
+        runBgSplitterJob(kind: "remove", on: images) { service, path in
+            try service.removeBackground(imagePath: path)
+        }
+    }
+
+    /// 選択画像をグリッド分割+背景透過する。出力は`<元名>_split/`フォルダに書き出される。
+    func splitSheet(for images: [ImageRecord]) {
+        runBgSplitterJob(kind: "split", on: images) { service, path in
+            try service.splitSheet(imagePath: path)
+        }
+    }
+
+    private func runBgSplitterJob(
+        kind: String,
+        on images: [ImageRecord],
+        _ operation: @escaping @Sendable (BgSplitterService, String) throws -> String
+    ) {
+        guard !images.isEmpty else { return }
+        guard let bgSplitterService else {
+            presentAlert(message: "bg-splitterが見つからない", informative: "~/Dev/tools/bg-splitter にvenvとbgsplit.pyがセットアップされているか確認してください")
+            return
+        }
+        let keys = images.map { "\($0.id)-\(kind)" }
+        guard keys.allSatisfy({ !inFlightBgSplitterJobs.contains($0) }) else { return }
+        inFlightBgSplitterJobs.formUnion(keys)
+
+        let targets = images
+        showToast(targets.count > 1 ? "\(targets.count)件を処理中…" : "処理中…")
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard self != nil else { return }
+            var successCount = 0
+            var failedNames: [String] = []
+            for image in targets {
+                do {
+                    _ = try operation(bgSplitterService, image.path)
+                    successCount += 1
+                } catch {
+                    failedNames.append("\(image.url.lastPathComponent): \(error)")
+                }
+            }
+            let finalSuccessCount = successCount
+            let finalFailedNames = failedNames
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.inFlightBgSplitterJobs.subtract(keys)
+                if finalFailedNames.isEmpty {
+                    self.showToast("\(finalSuccessCount)件の処理が完了しました")
+                } else if finalSuccessCount == 0 {
+                    self.presentAlert(message: "bg-splitterの処理に失敗した", informative: finalFailedNames.joined(separator: "\n"))
+                } else {
+                    self.presentAlert(
+                        message: "\(finalSuccessCount)件完了、\(finalFailedNames.count)件失敗",
+                        informative: finalFailedNames.joined(separator: "\n")
+                    )
+                }
+            }
         }
     }
 

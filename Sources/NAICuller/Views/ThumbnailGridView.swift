@@ -285,6 +285,24 @@ struct ThumbnailGridView: NSViewRepresentable {
             exportItem.target = self
             exportItem.representedObject = targets.map(\.id)
             menu.addItem(exportItem)
+
+            // bg-splitter(自分専用の背景透過+シート分割ツール)が見つかっている時だけ出す。
+            // 他のNAICullerユーザーの環境ではbgSplitterAvailableがfalseのままなので
+            // このセクション自体が表示されない（グレーアウトではなく非表示にしている）。
+            if appModel.bgSplitterAvailable {
+                menu.addItem(.separator())
+                let removeBgTitle = targets.count > 1 ? "選択中の\(targets.count)件を背景透過" : "背景透過"
+                let removeBgItem = NSMenuItem(title: removeBgTitle, action: #selector(removeBackgroundFromMenu(_:)), keyEquivalent: "")
+                removeBgItem.target = self
+                removeBgItem.representedObject = targets.map(\.id)
+                menu.addItem(removeBgItem)
+
+                let splitTitle = targets.count > 1 ? "選択中の\(targets.count)件をシート分割" : "シート分割(グリッド自動検出)"
+                let splitItem = NSMenuItem(title: splitTitle, action: #selector(splitSheetFromMenu(_:)), keyEquivalent: "")
+                splitItem.target = self
+                splitItem.representedObject = targets.map(\.id)
+                menu.addItem(splitItem)
+            }
             return menu
         }
 
@@ -321,6 +339,20 @@ struct ThumbnailGridView: NSViewRepresentable {
             panel.allowedContentTypes = [.json]
             guard panel.runModal() == .OK, let url = panel.url else { return }
             parent.appModel.exportImages(targetImages, fields: ExportFieldKind.allCases, to: url)
+        }
+
+        @objc private func removeBackgroundFromMenu(_ sender: NSMenuItem) {
+            guard let imageIds = sender.representedObject as? [Int64] else { return }
+            let targetImages = images.filter { imageIds.contains($0.id) }
+            guard !targetImages.isEmpty else { return }
+            parent.appModel.removeBackground(for: targetImages)
+        }
+
+        @objc private func splitSheetFromMenu(_ sender: NSMenuItem) {
+            guard let imageIds = sender.representedObject as? [Int64] else { return }
+            let targetImages = images.filter { imageIds.contains($0.id) }
+            guard !targetImages.isEmpty else { return }
+            parent.appModel.splitSheet(for: targetImages)
         }
 
         // MARK: - サムネイル読み込み（表示直前の遅延生成。詳細設計 0章）
