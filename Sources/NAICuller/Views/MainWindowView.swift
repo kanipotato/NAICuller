@@ -338,20 +338,10 @@ struct MainWindowView: View {
         panel.prompt = "追加"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         if let failure = appModel.addRoot(path: url.path) {
-            rootAdditionError = describe(failure)
+            rootAdditionError = failure.message
         } else {
             appModel.rescan()
         }
     }
 
-    private func describe(_ failure: RootPathValidator.Failure) -> String {
-        switch failure {
-        case .notExisting:
-            return "指定したパスが存在しません。"
-        case .notDirectory:
-            return "指定したパスはディレクトリではありません。"
-        case .duplicateOrContained(let existingPath):
-            return "既存のルート「\(existingPath)」と重複しているか、包含関係にあります。"
-        }
-    }
 }

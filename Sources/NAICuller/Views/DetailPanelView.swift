@@ -191,7 +191,7 @@ struct DetailPanelView: View {
                 .onSubmit { submitNewTag(image) }
 
             if !newTagText.isEmpty, let failure = TagNameValidator.validate(newTagText) {
-                Text(validationMessage(failure))
+                Text(failure.message)
                     .font(.caption)
                     .foregroundStyle(.red)
             }
@@ -218,13 +218,6 @@ struct DetailPanelView: View {
         showAddTagPopover = false
     }
 
-    private func validationMessage(_ failure: TagNameValidator.Failure) -> String {
-        switch failure {
-        case .empty: return "タグ名を入力してね"
-        case .containsControlCharacters: return "改行やタブは使えないよ"
-        case .tooLong: return "タグ名は\(TagNameValidator.maxLength)文字以内にしてね"
-        }
-    }
 
     // MARK: - 3. システム情報
 

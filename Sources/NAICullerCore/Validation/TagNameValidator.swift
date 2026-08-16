@@ -15,6 +15,21 @@ public enum TagNameValidator {
         case containsControlCharacters
         /// 文字数上限（64文字）を超えている。
         case tooLong
+
+        /// ユーザーに見せる説明文。
+        /// 元は`DetailPanelView`側にだけ`switch`があり、他の画面で同じ表示が必要に
+        /// なったときに複製される形になっていたため、`RootPathValidator.Failure`と
+        /// 揃えて失敗ケースを持つ側に寄せる。
+        public var message: String {
+            switch self {
+            case .empty:
+                return "タグ名を入力してね"
+            case .containsControlCharacters:
+                return "改行やタブは使えないよ"
+            case .tooLong:
+                return "タグ名は\(TagNameValidator.maxLength)文字以内にしてね"
+            }
+        }
     }
 
     /// 検証のみ行い、正規化はしない版。UI側で「赤枠にするかどうか」の判定に使う。
