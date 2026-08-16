@@ -23,10 +23,12 @@ final class AppModel: ObservableObject {
     private(set) var quickLookController: QuickLookController!
     private var exifToolService: ExifToolService?
     private var scanService: ScanService?
-    /// bg-splitter（自分専用の背景透過+シート分割ツール）への窓口。
-    /// ExifToolと違い一般配布していないため、他のNAICullerユーザーの環境では
-    /// 単に見つからず`bgSplitterAvailable=false`のままメニューがグレーアウトするだけで良い。
-    private var bgSplitterService: BgSplitterService?
+
+    /// bg-splitter（背景透過・シート分割）連携。アプリ本体の状態と共有するものが無い
+    /// プラグイン扱いの機能なので、状態も操作も`BgSplitterController`側に閉じている。
+    /// SwiftUIビューは`@EnvironmentObject`でこれを直接観測する（`NAICullerApp`が注入）。
+    /// AppKit側（`ThumbnailGridView`の右クリックメニュー）からは`appModel.bgSplitter`で辿る。
+    let bgSplitter = BgSplitterController()
 
     /// 固定表示ウィンドウを開くためのブリッジ。SwiftUIの`openWindow`環境アクションは
     /// View（今回は`NAICullerApp`自身）でしか取得できないため、AppKit側の右クリック
@@ -144,36 +146,6 @@ final class AppModel: ObservableObject {
     @Published var thumbnailSize: ThumbnailSize = .medium
 
     @Published private(set) var exifToolAvailable = false
-    @Published private(set) var bgSplitterAvailable = false
-
-    // MARK: - bg-splitter設定（UserDefaultsに永続化。プラグイン扱いなのでDB(SQLite)ではなく
-    // アプリ設定として保存する。空文字列はそれぞれ「既定値を使う」を意味する）。
-
-    @Published var bgSplitterCustomPath: String {
-        didSet { UserDefaults.standard.set(bgSplitterCustomPath, forKey: DefaultsKey.bgSplitterCustomPath) }
-    }
-    @Published var bgSplitterDefaultModel: String {
-        didSet { UserDefaults.standard.set(bgSplitterDefaultModel, forKey: DefaultsKey.bgSplitterDefaultModel) }
-    }
-    @Published var bgSplitterRemoveOutputPath: String {
-        didSet { UserDefaults.standard.set(bgSplitterRemoveOutputPath, forKey: DefaultsKey.bgSplitterRemoveOutputPath) }
-    }
-    @Published var bgSplitterSplitOutputPath: String {
-        didSet { UserDefaults.standard.set(bgSplitterSplitOutputPath, forKey: DefaultsKey.bgSplitterSplitOutputPath) }
-    }
-    /// 分割マニフェスト(`<元名>_manifest.json`)の保存先。空なら分割出力フォルダと同じ場所
-    /// （bgsplit.py側の既定）。処理枚数が増えるとマニフェストが分割結果と同じ数だけ
-    /// ライブラリ内に散らばるため、専用フォルダに集約して手動で見に行きたい場合に指定する。
-    @Published var bgSplitterManifestPath: String {
-        didSet { UserDefaults.standard.set(bgSplitterManifestPath, forKey: DefaultsKey.bgSplitterManifestPath) }
-    }
-    private enum DefaultsKey {
-        static let bgSplitterCustomPath = "bgSplitterCustomPath"
-        static let bgSplitterDefaultModel = "bgSplitterDefaultModel"
-        static let bgSplitterRemoveOutputPath = "bgSplitterRemoveOutputPath"
-        static let bgSplitterSplitOutputPath = "bgSplitterSplitOutputPath"
-        static let bgSplitterManifestPath = "bgSplitterManifestPath"
-    }
 
     @Published private(set) var isScanning = false
     @Published var toastMessage: String?
@@ -188,15 +160,6 @@ final class AppModel: ObservableObject {
     }
     @Published var pendingDeletionScope: DeletionScope?
     @Published private(set) var pendingDeletionCount: Int = 0
-
-    /// 「この分割をやり直す」の確認シートに渡す下ごしらえ。マニフェストを読めた時だけ
-    /// nil以外になり、シートのスライダーはこの`manifest.overflow`（前回使った値）を初期値にする。
-    struct SplitRedoRequest: Identifiable {
-        let id = UUID()
-        let cellImage: ImageRecord
-        let manifest: BgSplitterManifest
-    }
-    @Published var pendingSplitRedo: SplitRedoRequest?
 
     private var toastDismissTask: Task<Void, Never>?
     private var searchDebounceTask: Task<Void, Never>?
@@ -217,27 +180,17 @@ final class AppModel: ObservableObject {
     /// 1回目の完了を待たずに2回目が同じ`currentlyTagged`スナップショットを読んでしまい、
     /// add/removeが二重に走りうる）。キーは"\(imageId)-\(tagId)"。
     private var inFlightToggles: Set<String> = []
-    /// bg-splitterの背景透過/シート分割が(画像, 種別)単位で二重起動しないためのガード。
-    /// キーは"\(imageId)-remove"または"\(imageId)-split"。
-    private var inFlightBgSplitterJobs: Set<String> = []
 
     // MARK: - 起動
 
     init() {
-        // 他のストアドプロパティと違いUserDefaults由来の値なので、メソッド呼び出しが
-        // 始まる前(=self未初期化完了の段階)にここで読み込んでおく必要がある。
-        let defaults = UserDefaults.standard
-        bgSplitterCustomPath = defaults.string(forKey: DefaultsKey.bgSplitterCustomPath) ?? ""
-        bgSplitterDefaultModel = defaults.string(forKey: DefaultsKey.bgSplitterDefaultModel) ?? BgSplitterModel.defaultModelId
-        bgSplitterRemoveOutputPath = defaults.string(forKey: DefaultsKey.bgSplitterRemoveOutputPath) ?? ""
-        bgSplitterSplitOutputPath = defaults.string(forKey: DefaultsKey.bgSplitterSplitOutputPath) ?? ""
-        bgSplitterManifestPath = defaults.string(forKey: DefaultsKey.bgSplitterManifestPath) ?? ""
-
         setUpDatabaseAndThumbnailCache()
         recheckExifTool()
-        recheckBgSplitter()
         reloadAll()
         quickLookController = QuickLookController(appModel: self)
+        // トーストの表示口はAppModel側（MainWindowViewが観測している`toastMessage`）に
+        // 集約されているため、切り出したコントローラへは呼び出し口だけ渡す。
+        bgSplitter.showToast = { [weak self] message in self?.showToast(message) }
     }
 
     private func setUpDatabaseAndThumbnailCache() {
@@ -286,19 +239,6 @@ final class AppModel: ObservableObject {
             exifToolService = nil
             scanService = nil
         }
-    }
-
-    /// bg-splitterの検出をやり直す（起動時、およびSettings画面でパスを変更/「再チェック」した時に呼ぶ）。
-    /// `bgSplitterCustomPath`が空なら既定パス（`BgSplitterService.locate`参照）を見る。
-    func recheckBgSplitter() {
-        let customRoot = bgSplitterCustomPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterCustomPath)
-        guard let located = BgSplitterService.locate(customRoot: customRoot) else {
-            bgSplitterAvailable = false
-            bgSplitterService = nil
-            return
-        }
-        bgSplitterService = BgSplitterService(pythonExecutableURL: located.python, scriptURL: located.script)
-        bgSplitterAvailable = true
     }
 
     // MARK: - 再読み込み
@@ -837,158 +777,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    // MARK: - bg-splitter連携（背景透過・シート分割）
-
-    /// 選択画像を背景透過する。`model`省略時はSettings画面で設定したデフォルトモデルを使う
-    /// （右クリックメニューの「モデルを指定」サブメニューから呼ぶ時だけ明示的に渡す）。
-    /// 出力先はSettings画面で指定していれば`bgSplitterRemoveOutputPath`、未指定なら
-    /// 元画像と同じフォルダに`<元名>_nobg.png`。DBへの取り込みは行わない（見たければ
-    /// 「再スキャン」してもらう。差分スキャンなので新規ファイル分だけ軽く取り込める）。
-    /// コードレビュー指摘の修正：以前は`kind`に`resolvedModel`を含めていたため、同じ画像に対して
-    /// 異なるモデルで背景透過を連続実行すると別々のガードキーとして扱われ、2プロセスが同じ
-    /// `<元名>_nobg.png`へ並行書き込みして壊れうる不具合があった。出力パスはモデルに依らず
-    /// 同一なので、ガードも画像単位（モデル非依存）にする。
-    func removeBackground(for images: [ImageRecord], model: String? = nil) {
-        let resolvedModel = model ?? bgSplitterDefaultModel
-        let outputDir = bgSplitterRemoveOutputPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterRemoveOutputPath)
-        runBgSplitterJob(kind: "remove", on: images) { service, path in
-            try service.removeBackground(imagePath: path, model: resolvedModel, outputDirectory: outputDir)
-        }
-    }
-
-    /// 選択画像をグリッド分割+背景透過する。`model`/出力先の扱いは`removeBackground`と同様。
-    /// マニフェストの保存先は`bgSplitterManifestPath`が空なら分割出力フォルダと同じ場所になる。
-    func splitSheet(for images: [ImageRecord], model: String? = nil) {
-        let resolvedModel = model ?? bgSplitterDefaultModel
-        let outputDir = bgSplitterSplitOutputPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterSplitOutputPath)
-        let manifestDir = bgSplitterManifestPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterManifestPath)
-        runBgSplitterJob(kind: "split", on: images) { service, path in
-            try service.splitSheet(imagePath: path, model: resolvedModel, outputDirectory: outputDir, manifestDirectory: manifestDir)
-        }
-    }
-
-    // MARK: - 分割のやり直し（余白調整）
-
-    /// 右クリックされた画像が分割セルらしければマニフェストを読み、確認シートを出す準備をする。
-    /// 分割セルでない/マニフェストが読めない場合はメニュー自体を出さない設計なので
-    /// （`bgSplitterAvailable`と同様、ThumbnailGridView側で先にチェック済み）、
-    /// ここに来て読めなかった場合は「ファイルが移動された」等の想定外ケースとしてアラートを出す。
-    /// マニフェストの探索先は`bgSplitterManifestPath`優先、無ければセルと同じフォルダ
-    /// （`readManifest`側で後方互換フォールバック済み）。
-    func requestSplitRedo(for image: ImageRecord) {
-        let manifestDir = bgSplitterManifestPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterManifestPath)
-        guard let manifest = BgSplitterService.readManifest(forCellImagePath: image.path, manifestDirectory: manifestDir) else {
-            presentAlert(message: "分割時の情報が見つからない", informative: "マニフェスト(_manifest.json)が見つからないか、壊れているみたい。元ファイル名を変更していないか・保存先の設定を確認して、それでもダメなら元シートから改めて「シート分割」してね。")
-            return
-        }
-        pendingSplitRedo = SplitRedoRequest(cellImage: image, manifest: manifest)
-    }
-
-    func cancelSplitRedo() {
-        pendingSplitRedo = nil
-    }
-
-    /// `overflow`を指定してマニフェスト記載の元シートを再分割する。出力先は今見ているセルと
-    /// 同じフォルダ（＝前回の分割結果と同じ場所）なので、同名セルは上書きされる。
-    ///
-    /// コードレビュー指摘の修正：以前は`runBgSplitterJob`と違いガードを一切通していなかったため、
-    /// 同じ元シートから切り出された兄弟セル（例: r0_c0とr0_c1）から続けて「やり直す」を実行すると
-    /// 2つの再分割プロセスが同じ出力フォルダ・同じマニフェストへ並行書き込みしうる不具合があった。
-    /// キーは対象セルのIDではなく出力フォルダのパスにする（どのセルから起動しても同じ出力先に
-    /// 書き込む以上、フォルダ単位で排他すべきなため）。
-    func confirmSplitRedo(overflow: Double) {
-        guard let request = pendingSplitRedo else { return }
-        pendingSplitRedo = nil
-        guard let bgSplitterService else {
-            presentAlert(message: "bg-splitterが見つからない", informative: "設定画面の「背景透過・シート分割」タブでパスを確認してください")
-            return
-        }
-        let outputDir = URL(fileURLWithPath: request.cellImage.path).deletingLastPathComponent()
-        let manifestDir = bgSplitterManifestPath.isEmpty ? nil : URL(fileURLWithPath: bgSplitterManifestPath)
-        let sourcePath = request.manifest.source
-        let model = request.manifest.model
-
-        let jobKey = "split-redo-\(outputDir.path)"
-        guard inFlightBgSplitterJobs.insert(jobKey).inserted else {
-            presentAlert(message: "すでに再分割中みたい", informative: "完了を待ってからもう一度試してね。")
-            return
-        }
-        showToast("再分割中…")
-
-        Task.detached(priority: .userInitiated) { [weak self] in
-            guard self != nil else { return }
-            do {
-                _ = try bgSplitterService.splitSheet(
-                    imagePath: sourcePath, model: model, outputDirectory: outputDir,
-                    overflow: overflow, manifestDirectory: manifestDir
-                )
-                await MainActor.run { [weak self] in
-                    self?.inFlightBgSplitterJobs.remove(jobKey)
-                    self?.showToast("再分割が完了しました")
-                }
-            } catch {
-                await MainActor.run { [weak self] in
-                    self?.inFlightBgSplitterJobs.remove(jobKey)
-                    self?.presentAlert(message: "再分割に失敗した", informative: "\(error)")
-                }
-            }
-        }
-    }
-
-    private func runBgSplitterJob(
-        kind: String,
-        on images: [ImageRecord],
-        _ operation: @escaping @Sendable (BgSplitterService, String) throws -> String
-    ) {
-        guard !images.isEmpty else { return }
-        guard let bgSplitterService else {
-            presentAlert(message: "bg-splitterが見つからない", informative: "設定画面の「背景透過・シート分割」タブでパスを確認してください")
-            return
-        }
-        // コードレビュー指摘の修正：以前は選択の1件でも実行中だと`allSatisfy`がfalseになり、
-        // バッチ全体（未処理の残り）が何のフィードバックもなく丸ごと無視されていた。
-        // 実行中でないものだけに絞って処理を続行する。
-        let targets = images.filter { !inFlightBgSplitterJobs.contains("\($0.id)-\(kind)") }
-        guard !targets.isEmpty else {
-            showToast("すでに処理中だよ")
-            return
-        }
-        let keys = targets.map { "\($0.id)-\(kind)" }
-        inFlightBgSplitterJobs.formUnion(keys)
-
-        showToast(targets.count > 1 ? "\(targets.count)件を処理中…" : "処理中…")
-
-        Task.detached(priority: .userInitiated) { [weak self] in
-            guard self != nil else { return }
-            var successCount = 0
-            var failedNames: [String] = []
-            for image in targets {
-                do {
-                    _ = try operation(bgSplitterService, image.path)
-                    successCount += 1
-                } catch {
-                    failedNames.append("\(image.url.lastPathComponent): \(error)")
-                }
-            }
-            let finalSuccessCount = successCount
-            let finalFailedNames = failedNames
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.inFlightBgSplitterJobs.subtract(keys)
-                if finalFailedNames.isEmpty {
-                    self.showToast("\(finalSuccessCount)件の処理が完了しました")
-                } else if finalSuccessCount == 0 {
-                    self.presentAlert(message: "bg-splitterの処理に失敗した", informative: finalFailedNames.joined(separator: "\n"))
-                } else {
-                    self.presentAlert(
-                        message: "\(finalSuccessCount)件完了、\(finalFailedNames.count)件失敗",
-                        informative: finalFailedNames.joined(separator: "\n")
-                    )
-                }
-            }
-        }
-    }
-
     // MARK: - トースト・アラート共通処理
 
     func showToast(_ message: String, duration: TimeInterval = 2.5) {
@@ -1002,20 +790,10 @@ final class AppModel: ObservableObject {
     }
 
     private func presentAlert(message: String, informative: String?) {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = message
-        if let informative { alert.informativeText = informative }
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+        AlertPresenter.warn(message: message, informative: informative)
     }
 
     private func presentFatalAlert(message: String, informative: String?) {
-        let alert = NSAlert()
-        alert.alertStyle = .critical
-        alert.messageText = message
-        if let informative { alert.informativeText = informative }
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+        AlertPresenter.fatal(message: message, informative: informative)
     }
 }

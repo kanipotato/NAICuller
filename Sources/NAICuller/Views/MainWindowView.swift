@@ -7,6 +7,9 @@ import NAICullerCore
 /// `HSplitView`で構成し、右パネルの幅をドラッグでリサイズ可能にする。
 struct MainWindowView: View {
     @EnvironmentObject private var appModel: AppModel
+    /// 分割やり直しシートの提示のみに使う。AppModelのネストではなく直接観測しないと
+    /// `pendingSplitRedo`の変化でシートが開かない。
+    @EnvironmentObject private var bgSplitter: BgSplitterController
     @Environment(\.openWindow) private var openWindow
     @State private var showExifToolMissingAlert = false
     @State private var rootAdditionError: String?
@@ -80,7 +83,7 @@ struct MainWindowView: View {
         }
         // シート分割のやり直し（余白調整）。isPresented形式のalertだとスライダーを置けないので、
         // 他のモーダルと違いここだけ.sheet(item:)にしている。
-        .sheet(item: $appModel.pendingSplitRedo) { request in
+        .sheet(item: $bgSplitter.pendingSplitRedo) { request in
             SplitRedoSheetView(request: request)
                 .environmentObject(appModel)
         }

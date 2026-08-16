@@ -228,7 +228,10 @@ private struct ExifToolSettingsTab: View {
 /// アプリ本体（スキャン・タグ付け等）には一切影響しない。他のNAICullerユーザーには
 /// 「そもそも無い機能」として振る舞う（ExifToolのような必須ツールとは重みが違う）。
 private struct BgSplitterSettingsTab: View {
-    @EnvironmentObject private var appModel: AppModel
+    // AppModelではなくBgSplitterControllerを直接観測する。ネストしたObservableObjectの
+    // @Published変更は親のobjectWillChangeを発火しないため、AppModel経由で参照すると
+    // 検出状態やモデル選択の変化が画面に反映されない。
+    @EnvironmentObject private var bgSplitter: BgSplitterController
     @State private var pathText: String = ""
 
     var body: some View {
@@ -247,14 +250,14 @@ private struct BgSplitterSettingsTab: View {
                     Button("再チェック") { applyPathAndRecheck() }
                 }
 
-                if appModel.bgSplitterAvailable {
+                if bgSplitter.isAvailable {
                     Divider()
                     modelSection
                     Divider()
-                    OutputPathRow(title: "背景透過の出力先", path: $appModel.bgSplitterRemoveOutputPath)
-                    OutputPathRow(title: "シート分割の出力先", path: $appModel.bgSplitterSplitOutputPath)
+                    OutputPathRow(title: "背景透過の出力先", path: $bgSplitter.removeOutputPath)
+                    OutputPathRow(title: "シート分割の出力先", path: $bgSplitter.splitOutputPath)
                     Divider()
-                    OutputPathRow(title: "分割履歴(マニフェスト)の保存先", path: $appModel.bgSplitterManifestPath)
+                    OutputPathRow(title: "分割履歴(マニフェスト)の保存先", path: $bgSplitter.manifestPath)
                     Text("空欄だとシート分割の出力先ごとに小さいJSONファイル(<元名>_manifest.json)が溜まっていくよ。「この分割をやり直す」機能が使う元シートの記録なので、たくさん処理してファイルが増えてきたら、ここで専用フォルダにまとめて後で確認・削除しやすくできるよ。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -262,20 +265,20 @@ private struct BgSplitterSettingsTab: View {
             }
             .padding()
         }
-        .onAppear { pathText = appModel.bgSplitterCustomPath }
+        .onAppear { pathText = bgSplitter.customPath }
         // コードレビュー指摘の修正：以前は「選択...」か「再チェック」を押した時だけ
         // appModelへ反映していたため、手入力しただけで設定画面を閉じると入力が
         // 跡形もなく消えていた（他の出力先欄はappModelへ直接バインドしていて即時保存
         // されるのに、ここだけ挙動が違っていた）。入力のたびに永続化だけは行い、
         // 実際のパス再検出（ディスクアクセス）は「再チェック」ボタンでのみ行う。
         .onChange(of: pathText) { newValue in
-            appModel.bgSplitterCustomPath = newValue
+            bgSplitter.customPath = newValue
         }
     }
 
     @ViewBuilder
     private var statusSection: some View {
-        if appModel.bgSplitterAvailable {
+        if bgSplitter.isAvailable {
             Label("bg-splitterを検出済み", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
         } else {
@@ -295,12 +298,12 @@ private struct BgSplitterSettingsTab: View {
 
     @ViewBuilder
     private var modelSection: some View {
-        Picker("デフォルトモデル", selection: $appModel.bgSplitterDefaultModel) {
+        Picker("デフォルトモデル", selection: $bgSplitter.defaultModel) {
             ForEach(BgSplitterModel.all) { model in
                 Text(model.displayName).tag(model.id)
             }
         }
-        if let hint = BgSplitterModel.all.first(where: { $0.id == appModel.bgSplitterDefaultModel })?.usageHint {
+        if let hint = BgSplitterModel.all.first(where: { $0.id == bgSplitter.defaultModel })?.usageHint {
             Text(hint)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -322,8 +325,8 @@ private struct BgSplitterSettingsTab: View {
     }
 
     private func applyPathAndRecheck() {
-        appModel.bgSplitterCustomPath = pathText
-        appModel.recheckBgSplitter()
+        bgSplitter.customPath = pathText
+        bgSplitter.recheck()
     }
 }
 

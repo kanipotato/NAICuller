@@ -289,7 +289,7 @@ struct ThumbnailGridView: NSViewRepresentable {
             // bg-splitter(自分専用の背景透過+シート分割ツール)が見つかっている時だけ出す。
             // 他のNAICullerユーザーの環境ではbgSplitterAvailableがfalseのままなので
             // このセクション自体が表示されない（グレーアウトではなく非表示にしている）。
-            if appModel.bgSplitterAvailable {
+            if appModel.bgSplitter.isAvailable {
                 menu.addItem(.separator())
                 let imageIds = targets.map(\.id)
 
@@ -390,20 +390,20 @@ struct ThumbnailGridView: NSViewRepresentable {
             guard let action = sender.representedObject as? BgSplitterMenuAction else { return }
             let targetImages = images.filter { action.imageIds.contains($0.id) }
             guard !targetImages.isEmpty else { return }
-            parent.appModel.removeBackground(for: targetImages, model: action.model)
+            parent.appModel.bgSplitter.removeBackground(for: targetImages, model: action.model)
         }
 
         @objc private func splitSheetFromMenu(_ sender: NSMenuItem) {
             guard let action = sender.representedObject as? BgSplitterMenuAction else { return }
             let targetImages = images.filter { action.imageIds.contains($0.id) }
             guard !targetImages.isEmpty else { return }
-            parent.appModel.splitSheet(for: targetImages, model: action.model)
+            parent.appModel.bgSplitter.splitSheet(for: targetImages, model: action.model)
         }
 
         @objc private func redoSplitFromMenu(_ sender: NSMenuItem) {
             guard let imageId = sender.representedObject as? Int64,
                   let image = images.first(where: { $0.id == imageId }) else { return }
-            parent.appModel.requestSplitRedo(for: image)
+            parent.appModel.bgSplitter.requestSplitRedo(for: image)
         }
 
         // MARK: - サムネイル読み込み（表示直前の遅延生成。詳細設計 0章）
