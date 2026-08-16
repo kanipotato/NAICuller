@@ -487,13 +487,13 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.recycle(urls) { [weak self] newURLs, error in
             DispatchQueue.main.async {
                 guard let self else { return }
-                // コードレビュー指摘の修正：`newURLs`のキー（渡した元URL）と`targets`側のURLは
-                // 意味的に同じファイルでも、シンボリックリンク解決や表記の正規化により
-                // パス文字列がそのままでは一致しないことがある。`standardizedFileURL`で
-                // 両側を正規化してから比較し、実際に成功したのに「失敗」と誤判定して
-                // DBレコードが消し忘れられる（ゴミ箱の実体とDBがずれる）事故を防ぐ。
-                let succeededPaths = Set(newURLs.keys.map { $0.standardizedFileURL.path })
-                let succeededTargets = targets.filter { succeededPaths.contains($0.url.standardizedFileURL.path) }
+                // 元URLと返却キーの表記ゆれ（シンボリックリンク解決・パス正規化）を吸収する
+                // 突き合わせは、実バグを踏んだ箇所なのでCore層のTrashResultReconcilerに
+                // 切り出してテストで固定してある。
+                let succeededTargets = TrashResultReconciler.succeeded(
+                    targets: targets,
+                    recycledOriginalURLs: newURLs.keys
+                )
                 let failedCount = targets.count - succeededTargets.count
                 if !succeededTargets.isEmpty {
                     do {
@@ -593,13 +593,12 @@ final class AppModel: ObservableObject {
         }
         guard let tag = tags.first(where: { $0.id == tagId }) else { return }
 
-        let allTagged = images.allSatisfy { imageTagIds[$0.id]?.contains(tagId) ?? false }
-        let shouldAdd = !allTagged
-        let targets = images.filter { image in
-            let currentlyTagged = imageTagIds[image.id]?.contains(tagId) ?? false
-            return shouldAdd ? !currentlyTagged : currentlyTagged
-        }
-        guard !targets.isEmpty else { return }
+        // トライステートの判断（付けるか外すか・どれを触るか）は純粋ロジックとして
+        // Core層のBatchTagToggleに切り出してある。
+        let plan = BatchTagToggle.plan(images: images, tagId: tagId, imageTagIds: imageTagIds)
+        guard !plan.isNoOp else { return }
+        let shouldAdd = plan.shouldAdd
+        let targets = plan.targets
 
         let keys = targets.map { "\($0.id)-\(tagId)" }
         guard keys.allSatisfy({ !inFlightToggles.contains($0) }) else { return }
@@ -653,11 +652,9 @@ final class AppModel: ObservableObject {
                 if allFailedNames.isEmpty {
                     self.showToast("\(updatedCount)件のタグを更新したよ")
                 } else {
-                    let shown = allFailedNames.prefix(5).joined(separator: "、")
-                    let rest = allFailedNames.count > 5 ? "、他\(allFailedNames.count - 5)件" : ""
                     self.presentAlert(
                         message: "一部のタグ付けに失敗した",
-                        informative: "\(updatedCount)件成功。失敗: \(shown)\(rest)"
+                        informative: "\(updatedCount)件成功。失敗: \(FailureSummary.text(names: allFailedNames))"
                     )
                 }
             }
