@@ -345,6 +345,30 @@ final class AppModel: ObservableObject {
 
     // MARK: - ルート管理
 
+    /// フォルダ選択パネルを出してルートを追加し、成功したら続けてスキャンする。
+    /// メインウィンドウのツールバーと設定画面の両方から呼ばれる。
+    ///
+    /// 元は`MainWindowView`と`RootsSettingsTab`にほぼ同一の`chooseRoot()`が置かれていた
+    /// （コードレビュー指摘）。過去に「設定画面から追加したときだけ自動スキャンが抜けていて、
+    /// ルートを追加しても画像が0件のまま何も起きていないように見える」不具合があった箇所で、
+    /// 手順が2箇所に散っていると同じ取りこぼしが再発しうるためここへ集約する。
+    ///
+    /// - Returns: 追加に失敗した場合の表示用メッセージ。成功時・キャンセル時はnil
+    ///   （呼び出し側はこれをそのままエラー表示用の状態へ代入すればよい）。
+    func chooseAndAddRoot() -> String? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "追加"
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        if let failure = addRoot(path: url.path) {
+            return failure.message
+        }
+        rescan()
+        return nil
+    }
+
     func addRoot(path: String) -> RootPathValidator.Failure? {
         if let failure = RootPathValidator.validate(candidatePath: path, existingPaths: roots.map(\.path)) {
             return failure

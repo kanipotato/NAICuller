@@ -50,22 +50,9 @@ struct RootsSettingsTab: View {
     }
 
     private func chooseRoot() {
-        additionError = nil
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "追加"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        if let failure = appModel.addRoot(path: url.path) {
-            additionError = failure.message
-        } else {
-            // メインウィンドウの「ルート追加」と同じく、追加直後に自動でスキャンする
-            // （設定画面だけこれが抜けており、ルートを追加/再追加しても画像が0件のまま
-            // 何も起きたように見えないバグがあった。ユーザーが手動で「削除→再追加」を
-            // 試したときに気づいた）。
-            appModel.rescan()
-        }
+        // 追加直後の自動スキャンを含む一連の流れはAppModel側に集約してある
+        // （設定画面だけスキャンが抜けていた過去の不具合の再発防止）。
+        additionError = appModel.chooseAndAddRoot()
     }
 
 }

@@ -331,17 +331,7 @@ struct MainWindowView: View {
     }
 
     private func chooseRoot() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "追加"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        if let failure = appModel.addRoot(path: url.path) {
-            rootAdditionError = failure.message
-        } else {
-            appModel.rescan()
-        }
+        rootAdditionError = appModel.chooseAndAddRoot()
     }
 
 }
