@@ -30,12 +30,20 @@ NovelAIで生成したPNG画像（1万枚超）を、タグ付け→絞り込み
 - **差分スキャン**：2回目以降はmtime/file_sizeが変わっていないファイルを再読み込みしない。ファイルシステム上から消えたレコードは「孤児レコード」として確認の上で削除（自動削除はしない）
 - **DBが正データを持たない設計**：タグの正データは画像ファイル側（XMP:Subject）。DB（`~/Library/Application Support`）を削除しても再スキャンで復元できる
 - **ショートカット一覧をツールバーから表示**：キーボードショートカット・カスタムタグの割当を画面内でいつでも確認できる
+- **背景透過・シート分割（bg-splitterプラグイン連携／任意）**：後述の`bg-splitter`が見つかったときだけ右クリックメニューに追加される機能。無くても他の機能には一切影響しない
+  - **背景透過**：選択画像の背景を透過し、`<元名>_nobg.png`として書き出す（複数選択で一括実行）
+  - **シート分割**：NovelAIのexpression sheetのように複数キャラ／表情が1枚に並んだ画像をグリッド自動検出で分解し、各セルを透過PNG（`<元名>_r{行}_c{列}.png`）として書き出す
+  - **モデル選択**：`u2net`（汎用）／`u2net_human_seg`（人物）／`isnet-general-use`（高精度汎用）／`isnet-anime`（アニメ・イラスト。既定）／`silueta`（軽量・高速）の5種。既定モデルは設定画面で指定し、単発で変えたいときだけ右クリックの「モデルを指定」サブメニューから選ぶ
+  - **この分割をやり直す**：分割時に書き出したマニフェスト（`<元名>_manifest.json`）から元シート・モデル・余白設定を復元し、余白（overflow）だけスライダーで調整して同じ出力先に再分割する。グリッド検出がわずかにズレたときに、元シートを探し直さずその場で詰められる
+  - 出力先（背景透過／シート分割／マニフェスト）はそれぞれ設定画面で個別に指定できる。未指定なら元画像と同じ場所に書き出す
+  - 出力ファイルをDBへ自動取り込みはしない（見たいときは「再スキャン」する。差分スキャンなので新規分だけ軽く取り込める）
 
 ## 動作環境
 
 - macOS 13以降
 - ビルドに Swift Package Manager（Xcode Command Line Tools に同梱）が必要
 - [ExifTool](https://exiftool.org/) が必要（`brew install exiftool`）。未インストールの場合は起動時に案内ダイアログが出て、スキャン・タグ付け機能がグレーアウトする
+- **（任意）`bg-splitter`**：背景透過・シート分割機能を使う場合のみ必要。作者の自作Python CLIで一般配布はしていないため、**ほとんどの環境では見つからず、この機能のメニューが出ないだけ**で他の機能は通常どおり動く。既定の探索先は`~/Dev/tools/bg-splitter`で、`venv/bin/python3`と`bgsplit.py`が両方揃っていることを起動時に確認する。別の場所に置いている場合は設定画面の「背景透過・分割」タブでパスを指定する
 
 ## インストール
 
@@ -79,9 +87,14 @@ open ~/Applications/NAICuller.app
 - **SQLite**は外部依存を追加せず、システム標準の`import SQLite3`を直接使用（GRDB/SQLite.swift等は不使用）
 - **ExifTool**はバイナリを同梱せず、`brew install exiftool`でインストール済みの`/opt/homebrew/bin/exiftool`等を`Process()`で`-stay_open True -@ -`により常駐させ、パイプ経由でコマンドを流す自前ラッパー
 - **QLPreviewPanel（QuickLookUI）**で選択追従のプレビューを実装。アプリ全体で1インスタンスしか持てない制約があるため、比較用の固定表示ウィンドウはSwiftUIの値付き`WindowGroup(for:)` + `openWindow(value:)`で別実装している
-  - `Sources/NAICullerCore/` : DB(`DatabaseService`/`ImageRepository`/`TagRepository`)・ExifTool連携(`ExifToolProcess`/`ExifToolService`)・スキャン差分判定(`ScanService`)・サムネイル生成(`ThumbnailService`)・エクスポート(`ExportService`)・バリデーション(`TagNameValidator`/`RootPathValidator`)など、SwiftUI/AppKitに依存しない純粋なロジック
-  - `Sources/NAICuller/` : `NAICullerApp.swift`（アプリ本体）、`AppModel.swift`（状態管理）、`Views/`（UI本体）、`KeyHandling/`（キーボード操作）
-  - `Tests/NAICullerCoreTests/` : `swift test` で実行する単体・結合テスト（ExifToolServiceTestsは実際にNovelAI生成PNGでexiftoolサブプロセスを起動する結合テスト）
+- **bg-splitter**もExifToolと同じく`Process()`によるサブプロセス呼び出しだが、常駐させず1回の処理ごとにプロセスを起こす（ExifToolのような`-stay_open`の連続実行ではないため）。標準出力は捨て、標準エラーだけ`readabilityHandler`で実行中に読み進める（`waitUntilExit()`後にまとめて読むと、出力がパイプバッファを超えた時点で子プロセスがブロックしてデッドロックするため）。同じ画像・同じ出力先への二重起動は実行中キーの集合で防いでいる
+  - プラグイン扱いの機能なので、設定（パス・既定モデル・出力先3種）はDB(SQLite)ではなく`UserDefaults`に保存する。空文字列は「既定値を使う」の意味
+
+ディレクトリ構成:
+
+- `Sources/NAICullerCore/` : DB(`DatabaseService`/`ImageRepository`/`TagRepository`)・ExifTool連携(`ExifToolProcess`/`ExifToolService`)・スキャン差分判定(`ScanService`)・サムネイル生成(`ThumbnailService`)・エクスポート(`ExportService`)・bg-splitter連携(`BgSplitterService`)・バリデーション(`TagNameValidator`/`RootPathValidator`)など、SwiftUI/AppKitに依存しない純粋なロジック
+- `Sources/NAICuller/` : `NAICullerApp.swift`（アプリ本体）、`AppModel.swift`（状態管理）、`Views/`（UI本体）、`KeyHandling/`（キーボード操作）
+- `Tests/NAICullerCoreTests/` : `swift test` で実行する単体・結合テスト（ExifToolServiceTestsは実際にNovelAI生成PNGでexiftoolサブプロセスを起動する結合テスト）
 
 ## タグの保存先
 
@@ -92,6 +105,7 @@ open ~/Applications/NAICuller.app
 - `rm`コマンド文字列のクリップボードコピー補助は無し（「削除対象」タグの一括ゴミ箱移動で概ね代替可能）
 - FSEventsによるファイル変更の自動追従は無し（再スキャンは手動ボタンのみ）
 - App Store対応・Sandbox対応はしていない（個人ローカル利用のみを想定）
+- 「この分割をやり直す」は、分割**後**に元シートをリネーム・移動するとマニフェストが古いパスを指したままになり失敗する（分割セル自体は残るので実害は無く、やり直したいときは元シートから改めて「シート分割」する）
 
 ## 謝辞
 

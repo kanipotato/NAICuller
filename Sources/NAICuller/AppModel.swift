@@ -342,27 +342,20 @@ final class AppModel: ObservableObject {
     /// プロンプト検索・プロンプト候補絞り込み・削除対象の除外を適用し、`sortOrder`で並び替えた
     /// 結果を`filteredImages`に反映する。
     private func refreshFilteredImages() {
-        let deletionMarkId = hideDeletionMarked ? deletionMarkTagId() : nil
-        let narrowed = images.filter { image in
-            guard enabledRootIds.contains(image.rootId) else { return false }
-            if showUntaggedOnly {
-                guard (imageTagIds[image.id] ?? []).isEmpty else { return false }
-            } else if !selectedTagIds.isEmpty {
-                guard let tagIds = imageTagIds[image.id], selectedTagIds.isSubset(of: tagIds) else { return false }
-            }
-            if let deletionMarkId, imageTagIds[image.id]?.contains(deletionMarkId) == true {
-                return false
-            }
-            if !promptSearchText.isEmpty {
-                guard let prompt = image.promptCache,
-                      prompt.range(of: promptSearchText, options: [.caseInsensitive]) != nil else { return false }
-            }
-            if !selectedPromptTerms.isEmpty {
-                guard image.promptCache != nil else { return false }
-                guard selectedPromptTerms.isSubset(of: promptTerms(for: image)) else { return false }
-            }
-            return true
-        }
+        let criteria = ImageFilterCriteria(
+            enabledRootIds: enabledRootIds,
+            selectedTagIds: selectedTagIds,
+            showUntaggedOnly: showUntaggedOnly,
+            hiddenDeletionMarkTagId: hideDeletionMarked ? deletionMarkTagId() : nil,
+            promptSearchText: promptSearchText,
+            selectedPromptTerms: selectedPromptTerms
+        )
+        let narrowed = ImageFilter.apply(
+            to: images,
+            imageTagIds: imageTagIds,
+            criteria: criteria,
+            promptTerms: { [unowned self] in self.promptTerms(for: $0) }
+        )
         filteredImages = sortOrder.sorted(narrowed)
 
         // コードレビュー指摘の修正：フィルタで画面から消えた画像のIDが`selectedImageIds`に
