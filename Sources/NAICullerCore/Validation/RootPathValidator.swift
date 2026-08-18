@@ -8,6 +8,23 @@ public enum RootPathValidator {
         case notDirectory
         /// 既存ルートと完全一致、または一方が他方の祖先ディレクトリになっている。
         case duplicateOrContained(existingPath: String)
+
+        /// ユーザーに見せる説明文。
+        ///
+        /// 元はこの`switch`が`MainWindowView`と`SettingsView`にそれぞれ
+        /// `describe(_:)`として**同一の実装で重複**しており、片方の文言だけ直して
+        /// もう片方が古いまま残る形になっていた。失敗ケースを持つ側に文言を寄せて
+        /// 一元化する（ケースを増やしたときの追従漏れも防げる）。
+        public var message: String {
+            switch self {
+            case .notExisting:
+                return "指定したパスが存在しません。"
+            case .notDirectory:
+                return "指定したパスはディレクトリではありません。"
+            case .duplicateOrContained(let existingPath):
+                return "既存のルート「\(existingPath)」と重複しているか、包含関係にあります。"
+            }
+        }
     }
 
     /// - Parameters:

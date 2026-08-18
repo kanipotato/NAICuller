@@ -24,6 +24,10 @@ struct NAICullerApp: App {
         WindowGroup {
             MainWindowView()
                 .environmentObject(appModel)
+                // bg-splitter連携はAppModelにネストしたObservableObjectなので、
+                // 親経由では@Publishedの変更がビューに伝わらない。別途注入して直接観測させる
+                // （シートはこの環境を引き継ぐので、SplitRedoSheetViewにも届く）。
+                .environmentObject(appModel.bgSplitter)
                 .frame(minWidth: 900, minHeight: 600)
                 .onAppear {
                     if keyCommandHandler == nil {
@@ -43,6 +47,7 @@ struct NAICullerApp: App {
         Settings {
             SettingsView()
                 .environmentObject(appModel)
+                .environmentObject(appModel.bgSplitter)
                 .frame(width: 480, height: 420)
         }
 

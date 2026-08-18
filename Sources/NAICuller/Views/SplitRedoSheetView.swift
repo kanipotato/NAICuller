@@ -4,13 +4,13 @@ import NAICullerCore
 /// 「シート分割をやり直す」確認シート。マニフェストの`overflow`（前回使った値）を
 /// スライダーの初期値にし、結果を見てから微調整して再実行する運用を想定している。
 struct SplitRedoSheetView: View {
-    @EnvironmentObject private var appModel: AppModel
+    @EnvironmentObject private var bgSplitter: BgSplitterController
     @Environment(\.dismiss) private var dismiss
-    let request: AppModel.SplitRedoRequest
+    let request: BgSplitterController.SplitRedoRequest
 
     @State private var overflow: Double
 
-    init(request: AppModel.SplitRedoRequest) {
+    init(request: BgSplitterController.SplitRedoRequest) {
         self.request = request
         _overflow = State(initialValue: request.manifest.overflow)
     }
@@ -50,11 +50,11 @@ struct SplitRedoSheetView: View {
             HStack {
                 Spacer()
                 Button("キャンセル") {
-                    appModel.cancelSplitRedo()
+                    bgSplitter.cancelSplitRedo()
                     dismiss()
                 }
                 Button("再分割") {
-                    appModel.confirmSplitRedo(overflow: overflow)
+                    bgSplitter.confirmSplitRedo(overflow: overflow)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
