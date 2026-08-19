@@ -14,6 +14,14 @@ public struct ImageRecord: Equatable, Identifiable, Sendable {
     public var width: Int?
     public var height: Int?
     public var promptCache: String?
+    /// 生成元プラットフォーム（NovelAI／ComfyUI／不明）。スキャン時に`ImageSourcePlatform.detect`
+    /// で判定して保存する。既定値`.unknown`は旧スキーマ・未スキャンの画像を表す。
+    public var sourcePlatform: ImageSourcePlatform
+    /// ComfyUI画像の生成情報の元データ（`PNG:Prompt`の生JSON文字列）。意図的に`promptCache`とは
+    /// 別カラムに持たせている：`promptCache`はプロンプト検索・候補絞り込み機能が直接読む
+    /// フィールドで、そこにJSONの塊が混ざると検索結果や候補一覧がゴミだらけになるため
+    /// （プロンプト検索・候補絞り込みへのComfyUI統合は別タスクとして意図的に見送っている）。
+    public var comfyGenerationInfoJSON: String?
     public var lastScannedAt: Date
 
     public init(
@@ -25,6 +33,8 @@ public struct ImageRecord: Equatable, Identifiable, Sendable {
         width: Int?,
         height: Int?,
         promptCache: String?,
+        sourcePlatform: ImageSourcePlatform = .unknown,
+        comfyGenerationInfoJSON: String? = nil,
         lastScannedAt: Date
     ) {
         self.id = id
@@ -35,6 +45,8 @@ public struct ImageRecord: Equatable, Identifiable, Sendable {
         self.width = width
         self.height = height
         self.promptCache = promptCache
+        self.sourcePlatform = sourcePlatform
+        self.comfyGenerationInfoJSON = comfyGenerationInfoJSON
         self.lastScannedAt = lastScannedAt
     }
 

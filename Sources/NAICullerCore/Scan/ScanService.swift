@@ -111,7 +111,9 @@ public final class ScanService {
                     fileSize: Int64(fileSize),
                     width: metadata?.width,
                     height: metadata?.height,
-                    promptCache: metadata?.promptDescription
+                    promptCache: metadata?.promptDescription,
+                    sourcePlatform: metadata.map(ImageSourcePlatform.detect) ?? .unknown,
+                    comfyGenerationInfoJSON: metadata?.comfyPromptJSON
                 )
                 if let metadata {
                     try syncTags(imageId: existingId, tagNames: metadata.tagNames)
@@ -128,7 +130,9 @@ public final class ScanService {
                     fileSize: Int64(fileSize),
                     width: metadata?.width,
                     height: metadata?.height,
-                    promptCache: metadata?.promptDescription
+                    promptCache: metadata?.promptDescription,
+                    sourcePlatform: metadata.map(ImageSourcePlatform.detect) ?? .unknown,
+                    comfyGenerationInfoJSON: metadata?.comfyPromptJSON
                 )
                 seenIds.insert(newId)
                 if let metadata {

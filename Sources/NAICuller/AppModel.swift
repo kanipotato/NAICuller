@@ -141,6 +141,10 @@ final class AppModel: ObservableObject {
             }
         }
     }
+    /// サイドバー「生成元」でチェックが入っているプラットフォーム（Stable Diffusion/ComfyUI対応で追加）。
+    @Published var enabledSourcePlatforms: Set<ImageSourcePlatform> = Set(ImageSourcePlatform.allCases) {
+        didSet { refreshFilteredImages() }
+    }
     @Published var selectedImageIds: Set<Int64> = []
     @Published var focusedImageId: Int64?
     @Published var thumbnailSize: ThumbnailSize = .medium
@@ -288,7 +292,8 @@ final class AppModel: ObservableObject {
             showUntaggedOnly: showUntaggedOnly,
             hiddenDeletionMarkTagId: hideDeletionMarked ? deletionMarkTagId() : nil,
             promptSearchText: promptSearchText,
-            selectedPromptTerms: selectedPromptTerms
+            selectedPromptTerms: selectedPromptTerms,
+            enabledSourcePlatforms: enabledSourcePlatforms
         )
         let narrowed = ImageFilter.apply(
             to: images,
@@ -777,6 +782,14 @@ final class AppModel: ObservableObject {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(prompt, forType: .string)
         showToast("コピーしました")
+    }
+
+    /// ComfyUI画像の「生JSONをコピー」ボタン用。構造化表示で拾いきれない情報の逃げ道として、
+    /// `PNG:Prompt`の生JSON文字列（ワークフロー全体）をそのままコピーする。
+    func copyComfyRawJSON(_ rawJSON: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(rawJSON, forType: .string)
+        showToast("生JSONをコピーしたよ")
     }
 
     // MARK: - パスコピー

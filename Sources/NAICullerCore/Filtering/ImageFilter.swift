@@ -21,6 +21,9 @@ public struct ImageFilterCriteria: Equatable, Sendable {
     public var promptSearchText: String
     /// プロンプト候補絞り込みで選ばれた語句（AND条件：全部含む画像のみ残す）。空なら絞り込まない。
     public var selectedPromptTerms: Set<String>
+    /// サイドバーでチェックが入っている生成元プラットフォーム。ここに無いプラットフォームの
+    /// 画像は除外する（Stable Diffusion/ComfyUI対応で追加。他条件と同じくAND結合の一部）。
+    public var enabledSourcePlatforms: Set<ImageSourcePlatform>
 
     public init(
         enabledRootIds: Set<Int64> = [],
@@ -28,7 +31,8 @@ public struct ImageFilterCriteria: Equatable, Sendable {
         showUntaggedOnly: Bool = false,
         hiddenDeletionMarkTagId: Int64? = nil,
         promptSearchText: String = "",
-        selectedPromptTerms: Set<String> = []
+        selectedPromptTerms: Set<String> = [],
+        enabledSourcePlatforms: Set<ImageSourcePlatform> = Set(ImageSourcePlatform.allCases)
     ) {
         self.enabledRootIds = enabledRootIds
         self.selectedTagIds = selectedTagIds
@@ -36,6 +40,7 @@ public struct ImageFilterCriteria: Equatable, Sendable {
         self.hiddenDeletionMarkTagId = hiddenDeletionMarkTagId
         self.promptSearchText = promptSearchText
         self.selectedPromptTerms = selectedPromptTerms
+        self.enabledSourcePlatforms = enabledSourcePlatforms
     }
 }
 
@@ -56,6 +61,7 @@ public enum ImageFilter {
     ) -> [ImageRecord] {
         images.filter { image in
             guard criteria.enabledRootIds.contains(image.rootId) else { return false }
+            guard criteria.enabledSourcePlatforms.contains(image.sourcePlatform) else { return false }
 
             if criteria.showUntaggedOnly {
                 guard (imageTagIds[image.id] ?? []).isEmpty else { return false }

@@ -42,6 +42,48 @@ final class DatabaseServiceTests: XCTestCase {
         XCTAssertEqual(fetched?.width, 832)
         XCTAssertEqual(fetched?.height, 1216)
         XCTAssertEqual(fetched?.promptCache, "1girl, chibi")
+        // 明示的に指定しない場合は.unknown（旧スキーマ由来・未スキャンと同じ扱い）。
+        XCTAssertEqual(fetched?.sourcePlatform, .unknown)
+        XCTAssertNil(fetched?.comfyGenerationInfoJSON)
+    }
+
+    /// Stable Diffusion(ComfyUI)対応で追加した2カラム（source_platform/comfy_prompt_json）の
+    /// 挿入・更新・読み取りラウンドトリップ。
+    func testSourcePlatformAndComfyPromptJSONRoundTrip() throws {
+        let db = try DatabaseService(path: ":memory:")
+        let imageRepo = ImageRepository(db: db)
+        let rootId = try imageRepo.insertRoot(path: "/tmp/root1")
+
+        let imageId = try imageRepo.insertImage(
+            rootId: rootId,
+            path: "/tmp/root1/a.png",
+            mtime: 1,
+            fileSize: 1,
+            width: nil,
+            height: nil,
+            promptCache: nil,
+            sourcePlatform: .comfyUI,
+            comfyGenerationInfoJSON: #"{"CheckpointLoaderSimple.0": {"class_type": "CheckpointLoaderSimple", "inputs": {}}}"#
+        )
+
+        var fetched = try imageRepo.fetchImage(byPath: "/tmp/root1/a.png")
+        XCTAssertEqual(fetched?.sourcePlatform, .comfyUI)
+        XCTAssertEqual(fetched?.comfyGenerationInfoJSON, #"{"CheckpointLoaderSimple.0": {"class_type": "CheckpointLoaderSimple", "inputs": {}}}"#)
+
+        // updateImageでも正しく上書きされること（再スキャンでの更新経路）。
+        try imageRepo.updateImage(
+            id: imageId,
+            mtime: 2,
+            fileSize: 2,
+            width: nil,
+            height: nil,
+            promptCache: nil,
+            sourcePlatform: .novelAI,
+            comfyGenerationInfoJSON: nil
+        )
+        fetched = try imageRepo.fetchImage(byPath: "/tmp/root1/a.png")
+        XCTAssertEqual(fetched?.sourcePlatform, .novelAI)
+        XCTAssertNil(fetched?.comfyGenerationInfoJSON)
     }
 
     func testImagePathIsUnique() throws {
@@ -179,6 +221,44 @@ final class DatabaseServiceTests: XCTestCase {
 
         // BEGIN後の書き込みがROLLBACKで消えていること（コミットされて残っていないこと）。
         XCTAssertEqual(try imageRepo.fetchImages(rootId: rootId).count, 0)
+    }
+
+    /// 実際に使ってみてのフィードバックの回帰テスト：v1時代からある既存画像
+    /// （`source_platform`列が存在しなかった頃のもの）は、列追加だけでは全件`.unknown`のまま
+    /// 残ってしまい、通常の「再スキャン」（差分スキャンでmtime/file_size一致ファイルは
+    /// ExifTool再読み込みをスキップする）でも直らなかった。ExifToolを叩き直さず、
+    /// 既存の`prompt_cache`（v1時代は常にPNG:Descriptionから読んでいた＝NovelAIだけが
+    /// 書き込むフィールド）から安全に`.novelai`へバックフィルできることを確認する。
+    func testV3MigrationBackfillsNovelAIFromExistingPromptCache() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let dbPath = tempDir.appendingPathComponent("db.sqlite").path
+
+        let db1 = try DatabaseService(path: dbPath)
+        let imageRepo1 = ImageRepository(db: db1)
+        let rootId = try imageRepo1.insertRoot(path: "/tmp/root1")
+        let novelAIImageId = try imageRepo1.insertImage(
+            rootId: rootId, path: "/tmp/root1/a.png", mtime: 1, fileSize: 1,
+            width: nil, height: nil, promptCache: "1girl, chibi"
+        )
+        let noPromptImageId = try imageRepo1.insertImage(
+            rootId: rootId, path: "/tmp/root1/b.png", mtime: 1, fileSize: 1,
+            width: nil, height: nil, promptCache: nil
+        )
+        // 「v1時代からある、まだ一度もsource_platform判定されたことがない画像」を再現する：
+        // source_platformをNULLに戻し、user_versionを2（列は存在するがバックフィル未実施）に戻す。
+        try db1.execute("UPDATE images SET source_platform = NULL;")
+        try db1.execute("PRAGMA user_version = 2;")
+
+        // 再オープンでv2→v3への昇格が走り、バックフィルされることを確認する。
+        let dbReopened = try DatabaseService(path: dbPath)
+        let imageRepoReopened = ImageRepository(db: dbReopened)
+        let images = try imageRepoReopened.fetchImages(rootId: rootId)
+
+        XCTAssertEqual(images.first { $0.id == novelAIImageId }?.sourcePlatform, .novelAI)
+        // プロンプトが元々読めていなかった画像まで安易にNovelAI扱いしないこと。
+        XCTAssertEqual(images.first { $0.id == noPromptImageId }?.sourcePlatform, .unknown)
     }
 
     func testMigrationIsIdempotentWhenReopeningSamePath() throws {

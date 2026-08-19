@@ -265,13 +265,26 @@ struct DetailPanelView: View {
         return formatter
     }()
 
-    // MARK: - 4. プロンプト（折りたたみ＋コピー）
+    // MARK: - 4. プロンプト / 生成情報（生成元によって出し分け。Stable Diffusion/ComfyUI対応で追加）
 
+    /// アプリ全体のモード切り替えはせず、画像1枚ごとに`sourcePlatform`で出し分ける
+    /// （NovelAI/ComfyUIが混在するライブラリでも破綻しない設計。Notion開発ログ参照）。
     @ViewBuilder
     private func promptSection(_ image: ImageRecord) -> some View {
+        if image.sourcePlatform == .comfyUI {
+            comfyGenerationInfoSection(image)
+        } else {
+            // .novelAIは「NAIプロンプト」、.unknownは既存通り「プロンプト」（判定できていないので
+            // NAI由来と決め打たない）。中身の表示ロジック自体はどちらも同じ。
+            naiPromptSection(image, title: image.sourcePlatform == .novelAI ? "NAIプロンプト" : "プロンプト")
+        }
+    }
+
+    @ViewBuilder
+    private func naiPromptSection(_ image: ImageRecord, title: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("プロンプト").font(.headline)
+                Text(title).font(.headline)
                 Spacer()
                 Button {
                     appModel.copyPrompt(of: image)
@@ -299,5 +312,91 @@ struct DetailPanelView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// ComfyUI画像の生成情報。ノード種別ごとに抽出・重複除去した内容を並べる。
+    /// 1枚のグラフに複数バッチ分のノードが記録されているケースでは複数件になりうる
+    /// （実データ調査で確認済み。「見つかった分だけ正直に列挙する」という設計方針）。
+    @ViewBuilder
+    private func comfyGenerationInfoSection(_ image: ImageRecord) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("生成情報（ComfyUI）").font(.headline)
+                Spacer()
+                if let rawJSON = image.comfyGenerationInfoJSON {
+                    Button {
+                        appModel.copyComfyRawJSON(rawJSON)
+                    } label: {
+                        Label("生JSONをコピー", systemImage: "doc.on.doc")
+                    }
+                }
+            }
+
+            if let rawJSON = image.comfyGenerationInfoJSON,
+               let info = ComfyUIWorkflowParser.extractGenerationInfo(from: rawJSON),
+               !info.isEmpty {
+                comfyGenerationInfoContent(info)
+            } else {
+                Text("生成情報を読み取れなかったよ")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func comfyGenerationInfoContent(_ info: ComfyUIGenerationInfo) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if !info.checkpoints.isEmpty {
+                comfyInfoGroup("モデル") {
+                    ForEach(info.checkpoints, id: \.self) { name in
+                        Text(name).font(.caption).textSelection(.enabled)
+                    }
+                }
+            }
+            if !info.loras.isEmpty {
+                comfyInfoGroup("LoRA（\(info.loras.count)件）") {
+                    ForEach(Array(info.loras.enumerated()), id: \.offset) { _, lora in
+                        Text("\(lora.name)（model \(Self.formatted(lora.strengthModel))・clip \(Self.formatted(lora.strengthClip))）")
+                            .font(.caption)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+            if !info.promptPairs.isEmpty {
+                comfyInfoGroup("プロンプト（\(info.promptPairs.count)件）") {
+                    ForEach(Array(info.promptPairs.enumerated()), id: \.offset) { _, pair in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("ポジティブ").font(.caption2).foregroundStyle(.secondary)
+                            Text(pair.positive).font(.caption).textSelection(.enabled)
+                            Text("ネガティブ").font(.caption2).foregroundStyle(.secondary).padding(.top, 2)
+                            Text(pair.negative).font(.caption).textSelection(.enabled)
+                        }
+                        .padding(.bottom, 4)
+                    }
+                }
+            }
+            if !info.samplerParams.isEmpty {
+                comfyInfoGroup("サンプラー設定（\(info.samplerParams.count)件）") {
+                    ForEach(Array(info.samplerParams.enumerated()), id: \.offset) { _, params in
+                        Text("seed \(params.seed) / steps \(params.steps) / cfg \(Self.formatted(params.cfg)) / \(params.samplerName) / \(params.scheduler)")
+                            .font(.caption)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func comfyInfoGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption.bold()).foregroundStyle(.secondary)
+            content()
+        }
+    }
+
+    private static func formatted(_ value: Double) -> String {
+        value.truncatingRemainder(dividingBy: 1) == 0 ? String(format: "%.0f", value) : String(format: "%.2f", value)
     }
 }

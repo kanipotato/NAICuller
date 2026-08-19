@@ -185,6 +185,34 @@ final class ScanServiceTests: XCTestCase {
         XCTAssertTrue(tags.contains { $0.name == "お気に入り" && $0.isSystem })
     }
 
+    /// Stable Diffusion(ComfyUI)対応：スキャン時に生成元プラットフォームが判定・保存されること。
+    func testSourcePlatformIsDetectedAndPersistedDuringScan() throws {
+        let naiURL = try writeDummyPNG("nai.png")
+        let comfyURL = try writeDummyPNG("comfy.png")
+        let unknownURL = try writeDummyPNG("unknown.png")
+
+        fakeExifTool.metadataForPath[naiURL.path] = ExifMetadata(
+            promptDescription: "1girl, chibi", width: 100, height: 100, software: "NovelAI", tagNames: []
+        )
+        fakeExifTool.metadataForPath[comfyURL.path] = ExifMetadata(
+            promptDescription: nil, width: 100, height: 100, software: nil,
+            comfyPromptJSON: #"{"CheckpointLoaderSimple.0": {"class_type": "CheckpointLoaderSimple", "inputs": {}}}"#,
+            tagNames: []
+        )
+        fakeExifTool.metadataForPath[unknownURL.path] = ExifMetadata(
+            promptDescription: nil, width: 100, height: 100, software: nil, tagNames: []
+        )
+
+        _ = try imageRepo.insertRoot(path: tempDir.path)
+        let root = try imageRepo.fetchAllRoots().first!
+        _ = try scanService.scan(roots: [root])
+
+        XCTAssertEqual(try imageRepo.fetchImage(byPath: naiURL.path)?.sourcePlatform, .novelAI)
+        XCTAssertEqual(try imageRepo.fetchImage(byPath: comfyURL.path)?.sourcePlatform, .comfyUI)
+        XCTAssertNotNil(try imageRepo.fetchImage(byPath: comfyURL.path)?.comfyGenerationInfoJSON)
+        XCTAssertEqual(try imageRepo.fetchImage(byPath: unknownURL.path)?.sourcePlatform, .unknown)
+    }
+
     func testTagsRemovedFromFileAreUnsyncedOnUpdate() throws {
         let fileURL = try writeDummyPNG("a.png")
         fakeExifTool.metadataForPath[fileURL.path] = ExifMetadata(

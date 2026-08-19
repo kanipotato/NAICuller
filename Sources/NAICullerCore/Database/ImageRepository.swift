@@ -37,12 +37,13 @@ public final class ImageRepository {
 
     // MARK: - images
 
+    private static let imageColumns = """
+    id, root_id, path, mtime, file_size, width, height, prompt_cache, source_platform, comfy_prompt_json, last_scanned_at
+    """
+
     public func fetchImage(byPath path: String) throws -> ImageRecord? {
         try db.query(
-            """
-            SELECT id, root_id, path, mtime, file_size, width, height, prompt_cache, last_scanned_at
-            FROM images WHERE path = ?;
-            """,
+            "SELECT \(Self.imageColumns) FROM images WHERE path = ?;",
             [.text(path)]
         ) { row in Self.mapRow(row) }.first
     }
@@ -50,18 +51,12 @@ public final class ImageRepository {
     public func fetchImages(rootId: Int64? = nil) throws -> [ImageRecord] {
         if let rootId {
             return try db.query(
-                """
-                SELECT id, root_id, path, mtime, file_size, width, height, prompt_cache, last_scanned_at
-                FROM images WHERE root_id = ? ORDER BY path ASC;
-                """,
+                "SELECT \(Self.imageColumns) FROM images WHERE root_id = ? ORDER BY path ASC;",
                 [.integer(rootId)]
             ) { row in Self.mapRow(row) }
         }
         return try db.query(
-            """
-            SELECT id, root_id, path, mtime, file_size, width, height, prompt_cache, last_scanned_at
-            FROM images ORDER BY path ASC;
-            """
+            "SELECT \(Self.imageColumns) FROM images ORDER BY path ASC;"
         ) { row in Self.mapRow(row) }
     }
 
@@ -84,16 +79,20 @@ public final class ImageRepository {
         width: Int?,
         height: Int?,
         promptCache: String?,
+        sourcePlatform: ImageSourcePlatform = .unknown,
+        comfyGenerationInfoJSON: String? = nil,
         lastScannedAt: Date = Date()
     ) throws -> Int64 {
         try db.run(
             """
-            INSERT INTO images (root_id, path, mtime, file_size, width, height, prompt_cache, last_scanned_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            INSERT INTO images (root_id, path, mtime, file_size, width, height, prompt_cache, source_platform, comfy_prompt_json, last_scanned_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
             [
                 .integer(rootId), .text(path), .real(mtime), .integer(fileSize),
-                .from(width), .from(height), .from(promptCache), .text(Self.isoFormatter.string(from: lastScannedAt))
+                .from(width), .from(height), .from(promptCache),
+                .text(sourcePlatform.rawValue), .from(comfyGenerationInfoJSON),
+                .text(Self.isoFormatter.string(from: lastScannedAt))
             ]
         )
     }
@@ -105,15 +104,19 @@ public final class ImageRepository {
         width: Int?,
         height: Int?,
         promptCache: String?,
+        sourcePlatform: ImageSourcePlatform = .unknown,
+        comfyGenerationInfoJSON: String? = nil,
         lastScannedAt: Date = Date()
     ) throws {
         try db.run(
             """
-            UPDATE images SET mtime = ?, file_size = ?, width = ?, height = ?, prompt_cache = ?, last_scanned_at = ?
+            UPDATE images SET mtime = ?, file_size = ?, width = ?, height = ?, prompt_cache = ?,
+                source_platform = ?, comfy_prompt_json = ?, last_scanned_at = ?
             WHERE id = ?;
             """,
             [
                 .real(mtime), .integer(fileSize), .from(width), .from(height), .from(promptCache),
+                .text(sourcePlatform.rawValue), .from(comfyGenerationInfoJSON),
                 .text(Self.isoFormatter.string(from: lastScannedAt)), .integer(id)
             ]
         )
@@ -140,7 +143,10 @@ public final class ImageRepository {
             width: row.optionalInt(5),
             height: row.optionalInt(6),
             promptCache: row.optionalString(7),
-            lastScannedAt: isoFormatter.date(from: row.string(8) ?? "") ?? Date(timeIntervalSince1970: 0)
+            // 旧スキーマ由来・未スキャンのNULLは.unknownへ正規化する。
+            sourcePlatform: row.optionalString(8).flatMap(ImageSourcePlatform.init(rawValue:)) ?? .unknown,
+            comfyGenerationInfoJSON: row.optionalString(9),
+            lastScannedAt: isoFormatter.date(from: row.string(10) ?? "") ?? Date(timeIntervalSince1970: 0)
         )
     }
 }

@@ -6,7 +6,12 @@ import XCTest
 /// 条件の組み合わせ（特に「未タグのみ」とタグ絞り込みの優先順位、削除対象の除外）を
 /// ここで固定する。
 final class ImageFilterTests: XCTestCase {
-    private func makeImage(id: Int64, rootId: Int64 = 1, prompt: String? = nil) -> ImageRecord {
+    private func makeImage(
+        id: Int64,
+        rootId: Int64 = 1,
+        prompt: String? = nil,
+        platform: ImageSourcePlatform = .unknown
+    ) -> ImageRecord {
         ImageRecord(
             id: id,
             rootId: rootId,
@@ -16,6 +21,7 @@ final class ImageFilterTests: XCTestCase {
             width: nil,
             height: nil,
             promptCache: prompt,
+            sourcePlatform: platform,
             lastScannedAt: Date()
         )
     }
@@ -218,5 +224,32 @@ final class ImageFilterTests: XCTestCase {
         // 並び替えはImageSortOrderの責務なので、フィルタは入力順を保つ。
         let result = apply(images, criteria: ImageFilterCriteria(enabledRootIds: [1]))
         XCTAssertEqual(result, [3, 1, 2])
+    }
+
+    // MARK: - 生成元フィルタ（Stable Diffusion/ComfyUI対応）
+
+    /// 既定値（明示的に指定しない）では全プラットフォームが有効なままであること。
+    /// 既存ライブラリで挙動が変わらない（新機能導入で急に画像が消えたりしない）ことの保証。
+    func testDefaultCriteriaKeepsAllPlatforms() {
+        let images = [
+            makeImage(id: 1, platform: .novelAI),
+            makeImage(id: 2, platform: .comfyUI),
+            makeImage(id: 3, platform: .unknown)
+        ]
+        let result = apply(images, criteria: ImageFilterCriteria(enabledRootIds: [1]))
+        XCTAssertEqual(Set(result), [1, 2, 3])
+    }
+
+    func testDisablingAPlatformExcludesItsImages() {
+        let images = [
+            makeImage(id: 1, platform: .novelAI),
+            makeImage(id: 2, platform: .comfyUI),
+            makeImage(id: 3, platform: .unknown)
+        ]
+        let result = apply(
+            images,
+            criteria: ImageFilterCriteria(enabledRootIds: [1], enabledSourcePlatforms: [.comfyUI])
+        )
+        XCTAssertEqual(result, [2])
     }
 }
