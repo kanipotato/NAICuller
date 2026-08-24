@@ -86,6 +86,28 @@ final class DatabaseServiceTests: XCTestCase {
         XCTAssertNil(fetched?.comfyGenerationInfoJSON)
     }
 
+    /// NovelAI画像のseed対応で追加した`nai_comment_json`カラムのラウンドトリップ。
+    func testNaiCommentJSONRoundTrip() throws {
+        let db = try DatabaseService(path: ":memory:")
+        let imageRepo = ImageRepository(db: db)
+        let rootId = try imageRepo.insertRoot(path: "/tmp/root1")
+
+        _ = try imageRepo.insertImage(
+            rootId: rootId,
+            path: "/tmp/root1/a.png",
+            mtime: 1,
+            fileSize: 1,
+            width: nil,
+            height: nil,
+            promptCache: "1girl, chibi",
+            sourcePlatform: .novelAI,
+            naiGenerationInfoJSON: #"{"seed": 123, "steps": 28}"#
+        )
+
+        let fetched = try imageRepo.fetchImage(byPath: "/tmp/root1/a.png")
+        XCTAssertEqual(fetched?.naiGenerationInfoJSON, #"{"seed": 123, "steps": 28}"#)
+    }
+
     func testImagePathIsUnique() throws {
         let db = try DatabaseService(path: ":memory:")
         let imageRepo = ImageRepository(db: db)
@@ -247,8 +269,13 @@ final class DatabaseServiceTests: XCTestCase {
             width: nil, height: nil, promptCache: nil
         )
         // 「v1時代からある、まだ一度もsource_platform判定されたことがない画像」を再現する：
-        // source_platformをNULLに戻し、user_versionを2（列は存在するがバックフィル未実施）に戻す。
+        // source_platformをNULLに戻し、user_versionを2（source_platform/comfy_prompt_json列は
+        // 存在するがバックフィル未実施、nai_comment_json列はまだ無い）に戻す。DatabaseService(path:)
+        // は開いた瞬間に最新版まで一気にマイグレーションするため、単にuser_versionだけ戻すと
+        // v4のALTER TABLEが「既に存在する列」に対して再実行され失敗する。物理的な列も
+        // 実際のv2時点の状態に揃えておく必要がある。
         try db1.execute("UPDATE images SET source_platform = NULL;")
+        try db1.execute("ALTER TABLE images DROP COLUMN nai_comment_json;")
         try db1.execute("PRAGMA user_version = 2;")
 
         // 再オープンでv2→v3への昇格が走り、バックフィルされることを確認する。

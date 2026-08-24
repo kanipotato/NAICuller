@@ -112,6 +112,7 @@ public final class DatabaseService {
     /// v1: roots/images/tags/image_tagsの初期スキーマ作成＋固定タグ（お気に入り/削除対象）投入。
     /// v2: imagesに`source_platform`・`comfy_prompt_json`を追加（Stable Diffusion/ComfyUI対応）。
     /// v3: v1時代からある既存画像の`source_platform`をバックフィル（下記メソッド参照）。
+    /// v4: imagesに`nai_comment_json`を追加（NovelAI画像のseed等の生成パラメータ対応）。
     private func migrate() throws {
         let currentVersion = try userVersion()
         if currentVersion < 1 {
@@ -125,6 +126,10 @@ public final class DatabaseService {
         if currentVersion < 3 {
             try migrateV3BackfillNovelAIFromPromptCache()
             try setUserVersion(3)
+        }
+        if currentVersion < 4 {
+            try migrateV4AddNaiCommentJSON()
+            try setUserVersion(4)
         }
     }
 
@@ -221,6 +226,15 @@ public final class DatabaseService {
         WHERE (source_platform IS NULL OR source_platform = 'unknown')
           AND prompt_cache IS NOT NULL AND prompt_cache != '';
         """)
+    }
+
+    /// 既存の`images`テーブルへの列追加のみ。v2/v3と違い、この列はDB内の既存データから
+    /// 復元する術が無い（v1時代は`PNG:Comment`自体を一度も読んでいなかったため、
+    /// seed等の情報がそもそもどこにも保存されていない）。既存画像に反映するには
+    /// ExifToolでの再読み込みが要る（差分スキャンの仕組み上、通常の「再スキャン」では
+    /// mtime/file_size一致ファイルはスキップされるため、これだけでは直らない）。
+    private func migrateV4AddNaiCommentJSON() throws {
+        try execute("ALTER TABLE images ADD COLUMN nai_comment_json TEXT;")
     }
 
     // MARK: - 低レベルアクセス（bind変数必須）

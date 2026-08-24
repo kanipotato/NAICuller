@@ -792,6 +792,15 @@ final class AppModel: ObservableObject {
         showToast("生JSONをコピーしたよ")
     }
 
+    /// NovelAI画像のseedコピー用（実際に使ってみてのフィードバックで追加：履歴を消しても
+    /// seedさえあれば同じ画像を起点に再生成できるため、NovelAIの入力欄にそのまま貼れる
+    /// 文字列としてコピーする）。
+    func copySeed(_ seed: Int64) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(String(seed), forType: .string)
+        showToast("Seedをコピーしたよ")
+    }
+
     // MARK: - パスコピー
 
     func copyPath(of image: ImageRecord) {

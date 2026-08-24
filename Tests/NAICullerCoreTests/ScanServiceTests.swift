@@ -192,7 +192,8 @@ final class ScanServiceTests: XCTestCase {
         let unknownURL = try writeDummyPNG("unknown.png")
 
         fakeExifTool.metadataForPath[naiURL.path] = ExifMetadata(
-            promptDescription: "1girl, chibi", width: 100, height: 100, software: "NovelAI", tagNames: []
+            promptDescription: "1girl, chibi", width: 100, height: 100, software: "NovelAI",
+            naiCommentJSON: #"{"seed": 999, "steps": 28}"#, tagNames: []
         )
         fakeExifTool.metadataForPath[comfyURL.path] = ExifMetadata(
             promptDescription: nil, width: 100, height: 100, software: nil,
@@ -208,6 +209,7 @@ final class ScanServiceTests: XCTestCase {
         _ = try scanService.scan(roots: [root])
 
         XCTAssertEqual(try imageRepo.fetchImage(byPath: naiURL.path)?.sourcePlatform, .novelAI)
+        XCTAssertEqual(try imageRepo.fetchImage(byPath: naiURL.path)?.naiGenerationInfoJSON, #"{"seed": 999, "steps": 28}"#)
         XCTAssertEqual(try imageRepo.fetchImage(byPath: comfyURL.path)?.sourcePlatform, .comfyUI)
         XCTAssertNotNil(try imageRepo.fetchImage(byPath: comfyURL.path)?.comfyGenerationInfoJSON)
         XCTAssertEqual(try imageRepo.fetchImage(byPath: unknownURL.path)?.sourcePlatform, .unknown)

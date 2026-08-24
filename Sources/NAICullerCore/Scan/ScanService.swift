@@ -113,7 +113,8 @@ public final class ScanService {
                     height: metadata?.height,
                     promptCache: metadata?.promptDescription,
                     sourcePlatform: metadata.map(ImageSourcePlatform.detect) ?? .unknown,
-                    comfyGenerationInfoJSON: metadata?.comfyPromptJSON
+                    comfyGenerationInfoJSON: metadata?.comfyPromptJSON,
+                    naiGenerationInfoJSON: metadata?.naiCommentJSON
                 )
                 if let metadata {
                     try syncTags(imageId: existingId, tagNames: metadata.tagNames)
@@ -132,7 +133,8 @@ public final class ScanService {
                     height: metadata?.height,
                     promptCache: metadata?.promptDescription,
                     sourcePlatform: metadata.map(ImageSourcePlatform.detect) ?? .unknown,
-                    comfyGenerationInfoJSON: metadata?.comfyPromptJSON
+                    comfyGenerationInfoJSON: metadata?.comfyPromptJSON,
+                    naiGenerationInfoJSON: metadata?.naiCommentJSON
                 )
                 seenIds.insert(newId)
                 if let metadata {

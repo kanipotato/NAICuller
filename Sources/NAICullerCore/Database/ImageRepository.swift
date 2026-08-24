@@ -38,7 +38,7 @@ public final class ImageRepository {
     // MARK: - images
 
     private static let imageColumns = """
-    id, root_id, path, mtime, file_size, width, height, prompt_cache, source_platform, comfy_prompt_json, last_scanned_at
+    id, root_id, path, mtime, file_size, width, height, prompt_cache, source_platform, comfy_prompt_json, nai_comment_json, last_scanned_at
     """
 
     public func fetchImage(byPath path: String) throws -> ImageRecord? {
@@ -81,17 +81,18 @@ public final class ImageRepository {
         promptCache: String?,
         sourcePlatform: ImageSourcePlatform = .unknown,
         comfyGenerationInfoJSON: String? = nil,
+        naiGenerationInfoJSON: String? = nil,
         lastScannedAt: Date = Date()
     ) throws -> Int64 {
         try db.run(
             """
-            INSERT INTO images (root_id, path, mtime, file_size, width, height, prompt_cache, source_platform, comfy_prompt_json, last_scanned_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            INSERT INTO images (root_id, path, mtime, file_size, width, height, prompt_cache, source_platform, comfy_prompt_json, nai_comment_json, last_scanned_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
             [
                 .integer(rootId), .text(path), .real(mtime), .integer(fileSize),
                 .from(width), .from(height), .from(promptCache),
-                .text(sourcePlatform.rawValue), .from(comfyGenerationInfoJSON),
+                .text(sourcePlatform.rawValue), .from(comfyGenerationInfoJSON), .from(naiGenerationInfoJSON),
                 .text(Self.isoFormatter.string(from: lastScannedAt))
             ]
         )
@@ -106,17 +107,18 @@ public final class ImageRepository {
         promptCache: String?,
         sourcePlatform: ImageSourcePlatform = .unknown,
         comfyGenerationInfoJSON: String? = nil,
+        naiGenerationInfoJSON: String? = nil,
         lastScannedAt: Date = Date()
     ) throws {
         try db.run(
             """
             UPDATE images SET mtime = ?, file_size = ?, width = ?, height = ?, prompt_cache = ?,
-                source_platform = ?, comfy_prompt_json = ?, last_scanned_at = ?
+                source_platform = ?, comfy_prompt_json = ?, nai_comment_json = ?, last_scanned_at = ?
             WHERE id = ?;
             """,
             [
                 .real(mtime), .integer(fileSize), .from(width), .from(height), .from(promptCache),
-                .text(sourcePlatform.rawValue), .from(comfyGenerationInfoJSON),
+                .text(sourcePlatform.rawValue), .from(comfyGenerationInfoJSON), .from(naiGenerationInfoJSON),
                 .text(Self.isoFormatter.string(from: lastScannedAt)), .integer(id)
             ]
         )
@@ -146,7 +148,8 @@ public final class ImageRepository {
             // 旧スキーマ由来・未スキャンのNULLは.unknownへ正規化する。
             sourcePlatform: row.optionalString(8).flatMap(ImageSourcePlatform.init(rawValue:)) ?? .unknown,
             comfyGenerationInfoJSON: row.optionalString(9),
-            lastScannedAt: isoFormatter.date(from: row.string(10) ?? "") ?? Date(timeIntervalSince1970: 0)
+            naiGenerationInfoJSON: row.optionalString(10),
+            lastScannedAt: isoFormatter.date(from: row.string(11) ?? "") ?? Date(timeIntervalSince1970: 0)
         )
     }
 }

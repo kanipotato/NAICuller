@@ -22,6 +22,9 @@ public struct ImageRecord: Equatable, Identifiable, Sendable {
     /// フィールドで、そこにJSONの塊が混ざると検索結果や候補一覧がゴミだらけになるため
     /// （プロンプト検索・候補絞り込みへのComfyUI統合は別タスクとして意図的に見送っている）。
     public var comfyGenerationInfoJSON: String?
+    /// NovelAI画像の生成パラメータの元データ（`PNG:Comment`の生JSON文字列）。
+    /// `comfyGenerationInfoJSON`と同じ理由で`promptCache`とは別カラムに持たせている。
+    public var naiGenerationInfoJSON: String?
     public var lastScannedAt: Date
 
     public init(
@@ -35,6 +38,7 @@ public struct ImageRecord: Equatable, Identifiable, Sendable {
         promptCache: String?,
         sourcePlatform: ImageSourcePlatform = .unknown,
         comfyGenerationInfoJSON: String? = nil,
+        naiGenerationInfoJSON: String? = nil,
         lastScannedAt: Date
     ) {
         self.id = id
@@ -47,6 +51,7 @@ public struct ImageRecord: Equatable, Identifiable, Sendable {
         self.promptCache = promptCache
         self.sourcePlatform = sourcePlatform
         self.comfyGenerationInfoJSON = comfyGenerationInfoJSON
+        self.naiGenerationInfoJSON = naiGenerationInfoJSON
         self.lastScannedAt = lastScannedAt
     }
 

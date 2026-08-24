@@ -9,6 +9,7 @@ struct DetailPanelView: View {
     @State private var newTagText = ""
     @State private var showAddTagPopover = false
     @State private var promptExpanded = false
+    @State private var negativePromptExpanded = false
     @State private var previewImage: NSImage?
     @State private var previewLoadedForId: Int64?
 
@@ -57,6 +58,7 @@ struct DetailPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: focusedImage?.id) { _ in
             promptExpanded = false
+            negativePromptExpanded = false
         }
     }
 
@@ -277,6 +279,72 @@ struct DetailPanelView: View {
             // .novelAIは「NAIプロンプト」、.unknownは既存通り「プロンプト」（判定できていないので
             // NAI由来と決め打たない）。中身の表示ロジック自体はどちらも同じ。
             naiPromptSection(image, title: image.sourcePlatform == .novelAI ? "NAIプロンプト" : "プロンプト")
+            if image.sourcePlatform == .novelAI {
+                Divider()
+                naiGenerationParamsSection(image)
+            }
+        }
+    }
+
+    /// NovelAI画像の生成パラメータ（seed等）。実際に使ってみてのフィードバックで追加：
+    /// NovelAIの履歴を消してもseedさえあれば同じ画像を起点に再生成できるため、
+    /// 履歴に依存しない形で残しておきたいという要望。`PNG:Comment`から抽出する。
+    @ViewBuilder
+    private func naiGenerationParamsSection(_ image: ImageRecord) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("生成パラメータ").font(.headline)
+
+            if let rawJSON = image.naiGenerationInfoJSON,
+               let info = NAIGenerationInfoParser.extract(from: rawJSON),
+               !info.isEmpty {
+                if let seed = info.seed {
+                    HStack(spacing: 4) {
+                        Text("Seed").font(.caption2).foregroundStyle(.secondary)
+                        Text("\(seed)").font(.caption).textSelection(.enabled)
+                        Button {
+                            appModel.copySeed(seed)
+                        } label: {
+                            Image(systemName: "doc.on.doc").font(.caption2)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Seedをコピー")
+                    }
+                }
+
+                let detailParts: [String] = [
+                    info.steps.map { "steps \($0)" },
+                    info.scale.map { "scale \(Self.formatted($0))" },
+                    info.sampler,
+                    info.noiseSchedule,
+                    info.smea == true ? "SMEA" : nil,
+                    info.smDyn == true ? "SMEA DYN" : nil
+                ].compactMap { $0 }
+                if !detailParts.isEmpty {
+                    Text(detailParts.joined(separator: " / "))
+                        .font(.caption)
+                        .textSelection(.enabled)
+                }
+
+                if let negative = info.negativePrompt, !negative.isEmpty {
+                    DisclosureGroup(isExpanded: $negativePromptExpanded) {
+                        Text(negative)
+                            .font(.caption)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 4)
+                    } label: {
+                        Text(negativePromptExpanded ? "ネガティブプロンプトを折りたたむ" : "ネガティブプロンプトを表示")
+                            .font(.caption)
+                    }
+                }
+            } else {
+                // v1時代からある既存画像は、この列を追加しただけでは中身が無い
+                // （PNG:Commentを一度も読んでいなかったため復元不可）。ExifToolでの
+                // 再読み込みが必要（詳細はNotion開発ログ参照）。
+                Text("生成パラメータを読み取れなかったよ")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
