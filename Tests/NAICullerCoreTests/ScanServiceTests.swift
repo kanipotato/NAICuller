@@ -215,6 +215,33 @@ final class ScanServiceTests: XCTestCase {
         XCTAssertEqual(try imageRepo.fetchImage(byPath: unknownURL.path)?.sourcePlatform, .unknown)
     }
 
+    /// 設定画面「強制再スキャン」対応：mtime/file_sizeが変わっていなくても
+    /// `forceFullRescan: true`で全ファイルがExifToolで再読み込みされること。
+    func testForceFullRescanRereadsUnchangedFiles() throws {
+        let fileURL = try writeDummyPNG("a.png")
+        _ = try imageRepo.insertRoot(path: tempDir.path)
+        let root = try imageRepo.fetchAllRoots().first!
+        _ = try scanService.scan(roots: [root])
+        XCTAssertEqual(fakeExifTool.readCallCount, 1)
+
+        // ファイルは一切変更していない（mtime/file_sizeとも同じ）。
+        fakeExifTool.metadataForPath[fileURL.path] = ExifMetadata(
+            promptDescription: "再読込後のプロンプト", width: 100, height: 100, software: "NovelAI", tagNames: []
+        )
+
+        let normalResult = try scanService.scan(roots: [root])
+        XCTAssertEqual(normalResult.unchangedImageCount, 1)
+        XCTAssertEqual(fakeExifTool.readCallCount, 1, "通常スキャンでは再読み込みされないはず")
+
+        let forcedResult = try scanService.scan(roots: [root], forceFullRescan: true)
+        XCTAssertEqual(fakeExifTool.readCallCount, 2, "強制再スキャンでは変更が無くても再読み込みされるはず")
+        XCTAssertEqual(forcedResult.forcedRereadCount, 1)
+        // pixelは変わっていないのでサムネイル無効化対象(changedImageIds)には含めない。
+        XCTAssertTrue(forcedResult.changedImageIds.isEmpty)
+        // DBには新しいメタデータが反映されている。
+        XCTAssertEqual(try imageRepo.fetchImage(byPath: fileURL.path)?.promptCache, "再読込後のプロンプト")
+    }
+
     func testTagsRemovedFromFileAreUnsyncedOnUpdate() throws {
         let fileURL = try writeDummyPNG("a.png")
         fakeExifTool.metadataForPath[fileURL.path] = ExifMetadata(

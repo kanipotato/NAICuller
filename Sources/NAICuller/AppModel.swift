@@ -399,12 +399,16 @@ final class AppModel: ObservableObject {
 
     // MARK: - スキャン
 
-    func rescan() {
+    /// - Parameter forceFullRescan: trueの場合、変更の無いファイルも含めて全件ExifToolで
+    ///   再読み込みする（設定画面の「強制再スキャン」用）。アプリのアップデートでメタデータの
+    ///   読み取り項目が増えた際、v1時代からの既存画像には通常の差分スキャンでは反映されない
+    ///   ための救済手段（実際に踏んだ実例：source_platform・生成パラメータ対応）。
+    func rescan(forceFullRescan: Bool = false) {
         guard let scanService, !isScanning else { return }
         isScanning = true
         let targets = roots
         Task.detached(priority: .userInitiated) { [weak self] in
-            let result = try? scanService.scan(roots: targets)
+            let result = try? scanService.scan(roots: targets, forceFullRescan: forceFullRescan)
             guard let self else { return }
             await MainActor.run {
                 self.isScanning = false
@@ -425,7 +429,12 @@ final class AppModel: ObservableObject {
                     self.pendingOrphans = result.orphanImages
                     self.showOrphanConfirmation = true
                 }
-                self.showToast("スキャン完了: 新規\(result.newImageCount)件・更新\(result.updatedImageCount)件")
+                if forceFullRescan {
+                    let total = result.updatedImageCount + result.forcedRereadCount
+                    self.showToast("強制再スキャン完了: \(total)件を再読み込みしたよ")
+                } else {
+                    self.showToast("スキャン完了: 新規\(result.newImageCount)件・更新\(result.updatedImageCount)件")
+                }
             }
         }
     }
