@@ -171,13 +171,25 @@ final class AppModel: ObservableObject {
     @Published var pendingOrphans: [(id: Int64, path: String)] = []
     @Published var showOrphanConfirmation = false
 
-    /// 「削除対象」タグ付き画像のゴミ箱移動範囲。確認ダイアログを出す前の下ごしらえとして
-    /// nil以外を保持する（実際の移動はconfirmDeleteMarkedImages()を呼ぶまで実行しない）。
-    enum DeletionScope {
+    /// 「削除対象」タグ付き画像の移動範囲。
+    enum DeletionScope: Equatable {
         case selected
         case all
     }
-    @Published var pendingDeletionScope: DeletionScope?
+    /// 移動先（ゴミ箱 or ユーザーが選んだバックアップフォルダ）。バックアップフォルダは
+    /// 「何かに使うかもしれないから完全に消したくない」というフィードバックで追加した
+    /// （実際に使ってみての要望：ゴミ箱移動と選べるようにしたい）。
+    enum DeletionDestination: Equatable {
+        case trash
+        case backupFolder(URL)
+    }
+    /// 確認ダイアログを出す前の下ごしらえとして nil以外を保持する
+    /// （実際の移動はconfirmPendingDeletion()を呼ぶまで実行しない）。
+    struct PendingDeletion: Equatable {
+        var scope: DeletionScope
+        var destination: DeletionDestination
+    }
+    @Published var pendingDeletion: PendingDeletion?
     @Published private(set) var pendingDeletionCount: Int = 0
 
     private var toastDismissTask: Task<Void, Never>?
@@ -510,47 +522,71 @@ final class AppModel: ObservableObject {
         showOrphanConfirmation = false
     }
 
-    // MARK: - 削除対象タグの一括削除（実際に使ってみてのフィードバックで追加）
+    // MARK: - 削除対象タグの一括移動（実際に使ってみてのフィードバックで追加）
     //
     // ドラフト段階の設計方針「アプリはファイルシステムに破壊的操作をしない」から意図的に外れる
-    // 唯一の例外。ドラフトの「懸念・未解決」でも「ゴミ箱移動(NSWorkspace.recycle)は初版スコープ外。
+    // 例外。ドラフトの「懸念・未解決」でも「ゴミ箱移動(NSWorkspace.recycle)は初版スコープ外。
     // 将来必要なら追加検討」と明記していた、その"将来"が実際に来た形。事故を避けるため、
-    // 完全削除ではなく常にゴミ箱移動（復元可能）にし、対象は常に「削除対象タグが付いている画像」
-    // だけに厳密に絞る（選択に紛れ込んだ未タグの画像は対象外として黙って除外する）。
+    // 完全削除は一切せず、対象は常に「削除対象タグが付いている画像」だけに厳密に絞る
+    // （選択に紛れ込んだ未タグの画像は対象外として黙って除外する）。移動先は「ゴミ箱」（復元可能）
+    // か「ユーザーが選んだバックアップフォルダ」の2択（実際に使ってみての要望：「何かに使うかも
+    // しれないから完全に消したくない、バックアップフォルダへ移動したい」で追加）。
 
     /// 選択中の画像のうち「削除対象」タグが付いているものだけを数え、確認ダイアログの表示を要求する。
-    /// 実際の移動はconfirmDeleteMarkedImages()を呼ぶまで実行しない。
-    func requestDeleteSelectedMarkedImages() {
+    /// 実際の移動はconfirmPendingDeletion()を呼ぶまで実行しない。
+    func requestMoveSelectedMarkedImages(to destination: DeletionDestination) {
         let targets = selectedMarkedImages()
         guard !targets.isEmpty else {
             showToast("選択中に「削除対象」タグの画像が無いよ")
             return
         }
         pendingDeletionCount = targets.count
-        pendingDeletionScope = .selected
+        pendingDeletion = PendingDeletion(scope: .selected, destination: destination)
     }
 
     /// ライブラリ全体で「削除対象」タグが付いている画像（選択状態やフィルタとは無関係）を数え、
     /// 確認ダイアログの表示を要求する。
-    func requestDeleteAllMarkedImages() {
+    func requestMoveAllMarkedImages(to destination: DeletionDestination) {
         let targets = allMarkedImages()
         guard !targets.isEmpty else {
             showToast("「削除対象」タグの画像が無いよ")
             return
         }
         pendingDeletionCount = targets.count
-        pendingDeletionScope = .all
+        pendingDeletion = PendingDeletion(scope: .all, destination: destination)
     }
 
-    func confirmDeleteMarkedImages() {
-        guard let scope = pendingDeletionScope else { return }
-        let targets = scope == .selected ? selectedMarkedImages() : allMarkedImages()
-        pendingDeletionScope = nil
-        performTrashDeletion(targets)
+    /// バックアップフォルダを選ぶダイアログを出し、選ばれたら移動を要求する
+    /// （確認ダイアログはこの後`pendingDeletion`経由で別途出る）。キャンセル時は何もしない。
+    func chooseBackupFolderAndRequestMove(scope: DeletionScope) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "選択"
+        panel.message = "移動先のバックアップフォルダを選んでね"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        switch scope {
+        case .selected: requestMoveSelectedMarkedImages(to: .backupFolder(url))
+        case .all: requestMoveAllMarkedImages(to: .backupFolder(url))
+        }
     }
 
-    func cancelDeleteMarkedImages() {
-        pendingDeletionScope = nil
+    func confirmPendingDeletion() {
+        guard let pending = pendingDeletion else { return }
+        let targets = pending.scope == .selected ? selectedMarkedImages() : allMarkedImages()
+        pendingDeletion = nil
+        switch pending.destination {
+        case .trash:
+            performTrashDeletion(targets)
+        case .backupFolder(let url):
+            performBackupMove(targets, to: url)
+        }
+    }
+
+    func cancelPendingDeletion() {
+        pendingDeletion = nil
     }
 
     private func deletionMarkTagId() -> Int64? {
@@ -604,6 +640,61 @@ final class AppModel: ObservableObject {
                     self.presentAlert(
                         message: "一部の移動に失敗した",
                         informative: "\(succeededTargets.count)件成功・\(failedCount)件失敗。\(error.map { "\($0)" } ?? "")"
+                    )
+                }
+            }
+        }
+    }
+
+    /// 実際にバックアップフォルダへ移動する（`FileManager.moveItem`）。同名ファイルが既に
+    /// 移動先にあっても上書きせず、`BackupMoveService`で連番を付けて回避する（Finderの
+    /// 「コピー - ファイル名 2.png」と同じ考え方）。移動はディスクI/Oを伴うため
+    /// メインスレッドをブロックしないよう`Task.detached`で行う（`rescan()`と同じ方針）。
+    /// 移動に成功したものだけDBレコードを削除する（トラッシュ移動と同じ考え方）。
+    private func performBackupMove(_ targets: [ImageRecord], to folderURL: URL) {
+        guard !targets.isEmpty else { return }
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            let fileManager = FileManager.default
+            var existingNames = Set((try? fileManager.contentsOfDirectory(atPath: folderURL.path)) ?? [])
+            var succeededTargets: [ImageRecord] = []
+            var failedNames: [String] = []
+            for image in targets {
+                let destinationURL = BackupMoveService.uniqueDestinationURL(
+                    for: image.url, in: folderURL, existingNames: existingNames
+                )
+                do {
+                    try fileManager.moveItem(at: image.url, to: destinationURL)
+                    existingNames.insert(destinationURL.lastPathComponent)
+                    succeededTargets.append(image)
+                } catch {
+                    failedNames.append(image.url.lastPathComponent)
+                }
+            }
+            // `var`のままTask.detachedとMainActor.runの2クロージャに跨って参照すると
+            // Swift 6の厳格な並行性チェックで警告になるため、`let`に固定してから渡す
+            // （一括タグ付けの`toggleTag(tagId:on:[ImageRecord])`と同じ対応）。
+            let finalSucceededTargets = succeededTargets
+            let finalFailedNames = failedNames
+            await MainActor.run {
+                if !finalSucceededTargets.isEmpty {
+                    do {
+                        try self.imageRepository.deleteImages(ids: finalSucceededTargets.map(\.id))
+                    } catch {
+                        self.presentAlert(message: "DBレコードの削除に失敗した", informative: "\(error)")
+                    }
+                    for image in finalSucceededTargets {
+                        self.thumbnailService.invalidate(imageId: image.id)
+                    }
+                    self.selectedImageIds.subtract(Set(finalSucceededTargets.map(\.id)))
+                }
+                self.reloadAll()
+                if finalFailedNames.isEmpty {
+                    self.showToast("\(finalSucceededTargets.count)件をバックアップフォルダへ移動したよ")
+                } else {
+                    self.presentAlert(
+                        message: "一部の移動に失敗した",
+                        informative: "\(finalSucceededTargets.count)件成功・\(finalFailedNames.count)件失敗。\(FailureSummary.text(names: finalFailedNames))"
                     )
                 }
             }
