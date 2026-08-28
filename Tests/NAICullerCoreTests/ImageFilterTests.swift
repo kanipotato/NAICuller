@@ -10,12 +10,13 @@ final class ImageFilterTests: XCTestCase {
         id: Int64,
         rootId: Int64 = 1,
         prompt: String? = nil,
-        platform: ImageSourcePlatform = .unknown
+        platform: ImageSourcePlatform = .unknown,
+        path: String? = nil
     ) -> ImageRecord {
         ImageRecord(
             id: id,
             rootId: rootId,
-            path: "/tmp/root/\(id).png",
+            path: path ?? "/tmp/root/\(id).png",
             mtime: Double(id),
             fileSize: 100,
             width: nil,
@@ -24,6 +25,13 @@ final class ImageFilterTests: XCTestCase {
             sourcePlatform: platform,
             lastScannedAt: Date()
         )
+    }
+
+    /// 旧`enabledRootIds: Set<Int64>`と同じ意味で使うヘルパー：指定したidだけに絶対パスを持たせ、
+    /// それ以外のrootIdの画像は`ImageFilter.apply`内の`rootPaths[image.rootId]`が見つからず除外される
+    /// （`FolderVisibilityOverrides`を使わない、素朴なルート丸ごとON/OFFのテストに使う）。
+    private func rootPaths(for ids: Set<Int64>) -> [Int64: String] {
+        Dictionary(uniqueKeysWithValues: ids.map { ($0, "/tmp/root") })
     }
 
     /// プロンプト候補絞り込みを使わないテストでは呼ばれない想定なので、呼ばれたら失敗させる。
@@ -50,13 +58,13 @@ final class ImageFilterTests: XCTestCase {
 
     func testImagesOutsideEnabledRootsAreExcluded() {
         let images = [makeImage(id: 1, rootId: 1), makeImage(id: 2, rootId: 2)]
-        let result = apply(images, criteria: ImageFilterCriteria(enabledRootIds: [1]))
+        let result = apply(images, criteria: ImageFilterCriteria(rootPaths: rootPaths(for: [1])))
         XCTAssertEqual(result, [1])
     }
 
     func testEmptyEnabledRootsExcludesEverything() {
         let images = [makeImage(id: 1, rootId: 1), makeImage(id: 2, rootId: 2)]
-        let result = apply(images, criteria: ImageFilterCriteria(enabledRootIds: []))
+        let result = apply(images, criteria: ImageFilterCriteria(rootPaths: rootPaths(for: [])))
         XCTAssertEqual(result, [])
     }
 
@@ -68,7 +76,7 @@ final class ImageFilterTests: XCTestCase {
         let result = apply(
             images,
             tags: tags,
-            criteria: ImageFilterCriteria(enabledRootIds: [1], selectedTagIds: [10, 20])
+            criteria: ImageFilterCriteria(rootPaths: rootPaths(for: [1]), selectedTagIds: [10, 20])
         )
         // 2は20を持たないので落ちる。3は余分に30を持つが、部分集合条件なので残る。
         XCTAssertEqual(result, [1, 3])
@@ -79,7 +87,7 @@ final class ImageFilterTests: XCTestCase {
         let result = apply(
             images,
             tags: [:],
-            criteria: ImageFilterCriteria(enabledRootIds: [1], selectedTagIds: [10])
+            criteria: ImageFilterCriteria(rootPaths: rootPaths(for: [1]), selectedTagIds: [10])
         )
         XCTAssertEqual(result, [])
     }
@@ -92,7 +100,7 @@ final class ImageFilterTests: XCTestCase {
         let result = apply(
             images,
             tags: tags,
-            criteria: ImageFilterCriteria(enabledRootIds: [1], showUntaggedOnly: true)
+            criteria: ImageFilterCriteria(rootPaths: rootPaths(for: [1]), showUntaggedOnly: true)
         )
         XCTAssertEqual(result, [2])
     }
@@ -104,7 +112,7 @@ final class ImageFilterTests: XCTestCase {
         let result = apply(
             images,
             tags: tags,
-            criteria: ImageFilterCriteria(enabledRootIds: [1], selectedTagIds: [10], showUntaggedOnly: true)
+            criteria: ImageFilterCriteria(rootPaths: rootPaths(for: [1]), selectedTagIds: [10], showUntaggedOnly: true)
         )
         XCTAssertEqual(result, [2])
     }
@@ -117,7 +125,7 @@ final class ImageFilterTests: XCTestCase {
         let result = apply(
             images,
             tags: tags,
-            criteria: ImageFilterCriteria(enabledRootIds: [1], hiddenDeletionMarkTagId: 99)
+            criteria: ImageFilterCriteria(rootPaths: rootPaths(for: [1]), hiddenDeletionMarkTagId: 99)
         )
         XCTAssertEqual(result, [2])
     }
@@ -128,7 +136,7 @@ final class ImageFilterTests: XCTestCase {
         let result = apply(
             images,
             tags: tags,
-            criteria: ImageFilterCriteria(enabledRootIds: [1], hiddenDeletionMarkTagId: nil)
+            criteria: ImageFilterCriteria(rootPaths: rootPaths(for: [1]), hiddenDeletionMarkTagId: nil)
         )
         XCTAssertEqual(result, [1, 2])
     }
@@ -141,7 +149,7 @@ final class ImageFilterTests: XCTestCase {
         let result = apply(
             images,
             tags: tags,
-            criteria: ImageFilterCriteria(enabledRootIds: [1], showUntaggedOnly: true, hiddenDeletionMarkTagId: 99)
+            criteria: ImageFilterCriteria(rootPaths: rootPaths(for: [1]), showUntaggedOnly: true, hiddenDeletionMarkTagId: 99)
         )
         XCTAssertEqual(result, [2])
     }
@@ -156,7 +164,7 @@ final class ImageFilterTests: XCTestCase {
         ]
         let result = apply(
             images,
-            criteria: ImageFilterCriteria(enabledRootIds: [1], promptSearchText: "cat ears")
+            criteria: ImageFilterCriteria(rootPaths: rootPaths(for: [1]), promptSearchText: "cat ears")
         )
         XCTAssertEqual(result, [1])
     }
@@ -165,7 +173,7 @@ final class ImageFilterTests: XCTestCase {
         let images = [makeImage(id: 1, prompt: nil)]
         let result = apply(
             images,
-            criteria: ImageFilterCriteria(enabledRootIds: [1], promptSearchText: "cat")
+            criteria: ImageFilterCriteria(rootPaths: rootPaths(for: [1]), promptSearchText: "cat")
         )
         XCTAssertEqual(result, [])
     }
@@ -181,7 +189,7 @@ final class ImageFilterTests: XCTestCase {
         let terms: [Int64: Set<String>] = [1: ["1girl", "cat ears"], 2: ["1girl"]]
         let result = apply(
             images,
-            criteria: ImageFilterCriteria(enabledRootIds: [1], selectedPromptTerms: ["1girl", "cat ears"]),
+            criteria: ImageFilterCriteria(rootPaths: rootPaths(for: [1]), selectedPromptTerms: ["1girl", "cat ears"]),
             promptTerms: { terms[$0.id] ?? [] }
         )
         XCTAssertEqual(result, [1])
@@ -190,7 +198,7 @@ final class ImageFilterTests: XCTestCase {
     func testPromptTermsClosureIsNotCalledWhenNoTermsSelected() {
         let images = [makeImage(id: 1, prompt: "1girl")]
         // promptTermsにunusedPromptTerms（呼ばれたらXCTFail）を使う。
-        let result = apply(images, criteria: ImageFilterCriteria(enabledRootIds: [1]))
+        let result = apply(images, criteria: ImageFilterCriteria(rootPaths: rootPaths(for: [1])))
         XCTAssertEqual(result, [1])
     }
 
@@ -208,7 +216,7 @@ final class ImageFilterTests: XCTestCase {
             images,
             tags: tags,
             criteria: ImageFilterCriteria(
-                enabledRootIds: [1],
+                rootPaths: rootPaths(for: [1]),
                 selectedTagIds: [10],
                 hiddenDeletionMarkTagId: 99,
                 promptSearchText: "cat",
@@ -222,7 +230,7 @@ final class ImageFilterTests: XCTestCase {
     func testEmptyCriteriaKeepsOrderOfInput() {
         let images = [makeImage(id: 3), makeImage(id: 1), makeImage(id: 2)]
         // 並び替えはImageSortOrderの責務なので、フィルタは入力順を保つ。
-        let result = apply(images, criteria: ImageFilterCriteria(enabledRootIds: [1]))
+        let result = apply(images, criteria: ImageFilterCriteria(rootPaths: rootPaths(for: [1])))
         XCTAssertEqual(result, [3, 1, 2])
     }
 
@@ -236,7 +244,7 @@ final class ImageFilterTests: XCTestCase {
             makeImage(id: 2, platform: .comfyUI),
             makeImage(id: 3, platform: .unknown)
         ]
-        let result = apply(images, criteria: ImageFilterCriteria(enabledRootIds: [1]))
+        let result = apply(images, criteria: ImageFilterCriteria(rootPaths: rootPaths(for: [1])))
         XCTAssertEqual(Set(result), [1, 2, 3])
     }
 
@@ -248,7 +256,66 @@ final class ImageFilterTests: XCTestCase {
         ]
         let result = apply(
             images,
-            criteria: ImageFilterCriteria(enabledRootIds: [1], enabledSourcePlatforms: [.comfyUI])
+            criteria: ImageFilterCriteria(rootPaths: rootPaths(for: [1]), enabledSourcePlatforms: [.comfyUI])
+        )
+        XCTAssertEqual(result, [2])
+    }
+
+    // MARK: - フォルダツリー絞り込み（サブディレクトリ階層フィルタ機能で追加）
+
+    /// `FolderVisibilityResolver`自体の単体テストは`FolderTreeTests`にあるので、ここでは
+    /// `folderVisibilityOverrides`が`ImageFilter.apply`に正しく配線されていることだけを確認する。
+    func testFolderVisibilityOverrideExcludesImagesUnderThatFolder() {
+        let images = [
+            makeImage(id: 1, path: "/tmp/root/マスコット/オレンジChibi/1.png"),
+            makeImage(id: 2, path: "/tmp/root/マスコット/青Chibi/2.png"),
+            makeImage(id: 3, path: "/tmp/root/3.png")
+        ]
+        let result = apply(
+            images,
+            criteria: ImageFilterCriteria(
+                rootPaths: rootPaths(for: [1]),
+                folderVisibilityOverrides: [FolderVisibilityKey(rootId: 1, relativePath: "マスコット/青Chibi"): false]
+            )
+        )
+        XCTAssertEqual(Set(result), [1, 3])
+    }
+
+    /// レビュー指摘で見つかったテストカバレッジの穴の修正：旧`enabledRootIds`の直接の後継である
+    /// 「ツリーのルート直下ノードをOFFにして、そのルートの画像を丸ごと除外する」という最も基本的な
+    /// 操作に、統合レベル（`ImageFilter.apply`経由）のテストが1本も無かった。
+    func testRootLevelFolderVisibilityOverrideExcludesAllImagesOfThatRoot() {
+        let images = [
+            makeImage(id: 1, rootId: 1, path: "/tmp/root/マスコット/1.png"),
+            makeImage(id: 2, rootId: 1, path: "/tmp/root/2.png"),
+            makeImage(id: 3, rootId: 2, path: "/tmp/other/3.png")
+        ]
+        let result = apply(
+            images,
+            criteria: ImageFilterCriteria(
+                rootPaths: [1: "/tmp/root", 2: "/tmp/other"],
+                folderVisibilityOverrides: [FolderVisibilityKey(rootId: 1, relativePath: ""): false]
+            )
+        )
+        XCTAssertEqual(result, [3])
+    }
+
+    /// 祖先(親)がOFFでも、より近い子の明示ON設定が勝つことの確認（読み取りロジック自体の仕様。
+    /// 書き込み時の組み立て方は`FolderTreeTests`の`togglingVisibility`系のテスト参照）。
+    func testMoreSpecificChildOverrideWinsOverDisabledAncestor() {
+        let images = [
+            makeImage(id: 1, path: "/tmp/root/マスコット/オレンジChibi/1.png"),
+            makeImage(id: 2, path: "/tmp/root/マスコット/青Chibi/2.png")
+        ]
+        let result = apply(
+            images,
+            criteria: ImageFilterCriteria(
+                rootPaths: rootPaths(for: [1]),
+                folderVisibilityOverrides: [
+                    FolderVisibilityKey(rootId: 1, relativePath: "マスコット"): false,
+                    FolderVisibilityKey(rootId: 1, relativePath: "マスコット/青Chibi"): true
+                ]
+            )
         )
         XCTAssertEqual(result, [2])
     }

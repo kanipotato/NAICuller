@@ -1,14 +1,16 @@
 import SwiftUI
 import NAICullerCore
 
-/// サイドバー：生成元一覧・登録ルート一覧（チェックボックス）・タグ一覧（`:`を含むタグは自動グルーピング）。
+/// サイドバー：生成元一覧・登録ルートのフォルダツリー（サブディレクトリ階層フィルタ）・
+/// タグ一覧（`:`を含むタグは自動グルーピング）。
 struct SidebarView: View {
     @EnvironmentObject private var appModel: AppModel
 
     var body: some View {
         List {
-            // Stable Diffusion(ComfyUI)対応で追加。「ルート」チェックボックスと全く同じ
-            // パターン（`enabledRootIds`⇔`enabledSourcePlatforms`）で、見た目・挙動を揃えている。
+            // Stable Diffusion(ComfyUI)対応で追加。フラットなSetでON/OFFを持つシンプルな
+            // チェックボックス絞り込み（旧「ルート」セクションが使っていたのと同じパターン。
+            // 「ルート」セクション自体はその後フォルダツリー化されたため、今はこちらだけがこの形）。
             Section("生成元") {
                 ForEach(ImageSourcePlatform.allCases) { platform in
                     HStack {
@@ -30,28 +32,19 @@ struct SidebarView: View {
                 }
             }
 
+            // サブディレクトリ階層フィルタ機能で、旧「ルートのフラットなON/OFFチェックボックス」から
+            // VSCode風の展開可能なフォルダツリーに置き換えた（ルート直下ノードが旧enabledRootIdsと
+            // 同じ役割を果たす）。
             Section("ルート") {
                 ForEach(appModel.roots) { root in
-                    HStack {
-                        Toggle(isOn: Binding(
-                            get: { appModel.enabledRootIds.contains(root.id) },
-                            set: { isOn in
-                                if isOn { appModel.enabledRootIds.insert(root.id) }
-                                else { appModel.enabledRootIds.remove(root.id) }
-                            }
-                        )) {
-                            Text((root.path as NSString).lastPathComponent)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                        .toggleStyle(.checkbox)
-                        if appModel.rootWarnings[root.path] != nil {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                                .help(appModel.rootWarnings[root.path] ?? "")
-                        }
+                    if let tree = appModel.folderTrees[root.id] {
+                        FolderTreeRowView(
+                            rootId: root.id,
+                            node: tree,
+                            warning: appModel.rootWarnings[root.path],
+                            tooltip: root.path
+                        )
                     }
-                    .help(root.path)
                 }
             }
 

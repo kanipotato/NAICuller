@@ -46,7 +46,17 @@ final class AppModel: ObservableObject {
 
     // MARK: - Published state
 
-    @Published private(set) var roots: [Root] = []
+    /// レビュー指摘の修正：旧`enabledRootIds`の`didSet`が担っていた「rootsが変わったら絞り込みを
+    /// 再計算する」という反応の連鎖が、置き換え後に失われていた（`rootPaths`は算出プロパティのみで
+    /// フックが無かった）。ルート追加直後、ExifTool未導入などで`rescan()`が早期returnして
+    /// `reloadImages()`まで届かないケースで、新規ルートのフォルダツリーがサイドバーに一切表示されない
+    /// 実害があったため、`didSet`で明示的に再構築する。
+    @Published private(set) var roots: [Root] = [] {
+        didSet {
+            rebuildFolderTrees()
+            refreshFilteredImages()
+        }
+    }
     @Published private(set) var rootWarnings: [String: String] = [:] // rootPath -> reason
     @Published private(set) var tags: [Tag] = []
     @Published private(set) var tagCounts: [Int64: Int] = [:]
@@ -77,11 +87,16 @@ final class AppModel: ObservableObject {
             }
         }
     }
-    /// サイドバーのルートチェックボックスで有効化されているルート（未チェックのルート配下の画像は
-    /// グリッドから一時的に除外する。DBからは削除しない表示フィルタ）。
-    @Published var enabledRootIds: Set<Int64> = [] {
+    /// サイドバーのフォルダツリーで明示的にON/OFFされたフォルダ（サブディレクトリ階層フィルタ機能）。
+    /// キーが無いフォルダは表示扱い（デフォルト）。「最も近い祖先の設定が勝つ」方式で実効の表示/非表示を
+    /// 解決する（`FolderVisibilityResolver`）。旧`enabledRootIds`（ルート丸ごとON/OFF）はこれに統合され
+    /// 廃止した：ツリーのルート直下ノード（`relativePath: ""`）が同じ役割を果たすため。
+    @Published var folderVisibilityOverrides: [FolderVisibilityKey: Bool] = [:] {
         didSet { refreshFilteredImages() }
     }
+    /// ルートIDごとのフォルダツリー（サイドバー表示用）。`reloadImages()`のたびに再構築する
+    /// （DBスキーマは変更せず、画像一覧から都度メモリ上に組み立てるキャッシュ）。
+    @Published private(set) var folderTrees: [Int64: FolderNode] = [:]
     /// プロンプト本文に対する部分一致検索（大文字小文字は区別しない）。空文字なら絞り込まない。
     /// タグを付ける前の画像を「プロンプトの内容」で見つけるための入り口として追加した。
     ///
@@ -254,13 +269,14 @@ final class AppModel: ObservableObject {
     }
 
     func reloadRoots() {
-        let previousIds = Set(roots.map(\.id))
+        // 新規ルートのデフォルト有効化は`folderVisibilityOverrides`の「キーが無ければ表示」という
+        // デフォルトで自動的に成り立つため、旧`enabledRootIds`にあった追跡コード（前回IDとの差分計算）は不要。
         roots = (try? imageRepository.fetchAllRoots()) ?? []
-        let currentIds = Set(roots.map(\.id))
-        // 新規に増えたルート（前回時点で知らなかったID）はデフォルト有効にする。
-        let newlyAddedIds = currentIds.subtracting(previousIds)
-        enabledRootIds.formIntersection(currentIds) // 削除済みルートのIDは外す
-        enabledRootIds.formUnion(newlyAddedIds) // 新規ルートを有効化（既存ルートの手動OFFは保持）
+    }
+
+    /// rootId→ルート絶対パス。フィルタ条件（`ImageFilterCriteria.rootPaths`）用。
+    private var rootPaths: [Int64: String] {
+        Dictionary(uniqueKeysWithValues: roots.map { ($0.id, $0.path) })
     }
 
     func reloadTags() {
@@ -279,15 +295,29 @@ final class AppModel: ObservableObject {
         imageTagIds = images.reduce(into: [Int64: Set<Int64>]()) { mapping, image in
             mapping[image.id] = allTagIds[image.id] ?? []
         }
+        rebuildFolderTrees()
         refreshFilteredImages()
     }
 
-    /// サイドバーのルートチェックボックス・タグ絞り込み（AND条件：選択した全タグを持つ画像のみ）・
+    /// `folderTrees`を`images`の現在の内容から再構築する。`reloadImages()`（タグ付けのたびに呼ばれる
+    /// ホットパス）と`roots`の`didSet`の両方から呼ぶため、レビュー指摘の修正：ルートごとに`images`
+    /// 全体を毎回スキャンする（O(画像数×ルート数)）のを避け、`Dictionary(grouping:)`で1回だけ
+    /// ルートIDごとに振り分けてから、各ルートは自分の分だけを`FolderTreeBuilder.build`に渡す
+    /// （O(画像数)に削減）。
+    private func rebuildFolderTrees() {
+        let imagesByRoot = Dictionary(grouping: images, by: \.rootId)
+        folderTrees = Dictionary(uniqueKeysWithValues: roots.map { root in
+            (root.id, FolderTreeBuilder.build(images: imagesByRoot[root.id] ?? [], root: root))
+        })
+    }
+
+    /// サイドバーのフォルダツリー絞り込み・タグ絞り込み（AND条件：選択した全タグを持つ画像のみ）・
     /// プロンプト検索・プロンプト候補絞り込み・削除対象の除外を適用し、`sortOrder`で並び替えた
     /// 結果を`filteredImages`に反映する。
     private func refreshFilteredImages() {
         let criteria = ImageFilterCriteria(
-            enabledRootIds: enabledRootIds,
+            rootPaths: rootPaths,
+            folderVisibilityOverrides: folderVisibilityOverrides,
             selectedTagIds: selectedTagIds,
             showUntaggedOnly: showUntaggedOnly,
             hiddenDeletionMarkTagId: hideDeletionMarked ? deletionMarkTagId() : nil,
@@ -325,17 +355,24 @@ final class AppModel: ObservableObject {
         return terms
     }
 
-    /// 「有効なルート」内の画像プロンプトを分析し、`promptCandidates`を更新する
+    /// 「フォルダツリーで表示中」の画像プロンプトを分析し、`promptCandidates`を更新する
     /// （プロンプト候補絞り込みポップオーバーを開いたとき・再分析ボタンで呼ぶ）。
-    /// タグ絞り込みや既存のプロンプト検索は意図的に無視する：あくまで「今見えているルート内に
+    /// タグ絞り込みや既存のプロンプト検索は意図的に無視する：あくまで「今見えているフォルダ内に
     /// どんなプロンプトがあるか」の全体像を示す入り口なので、他の絞り込み条件で候補自体が
-    /// 先細りしていく（後から使いたかった語句が候補から消える）のを避けるため。
+    /// 先細りしていく（後から使いたかった語句が候補から消える）のを避けるため
+    /// （サブディレクトリ階層フィルタでフォルダ単位に表示/非表示を細かく分けられるようになったため、
+    /// この「無視する」対象にフォルダツリーの絞り込みは含まれない＝ツリーで隠したフォルダの
+    /// プロンプトは候補にも出さない、という仕様）。
     func analyzePromptCandidates() {
         // コードレビュー指摘の修正：前回の分析が走っていれば捨てる（結果の追い越しを防ぐ）。
         promptAnalysisTask?.cancel()
         isAnalyzingPromptCandidates = true
+        // レビュー指摘の修正：`ImageFilter.apply`と同じ3段階判定を書き下していた（二重実装）。
+        // `FolderVisibilityResolver.isImageVisible`に集約する。
+        let paths = rootPaths
+        let overrides = folderVisibilityOverrides
         let prompts = images
-            .filter { enabledRootIds.contains($0.rootId) }
+            .filter { FolderVisibilityResolver.isImageVisible($0, rootPaths: paths, overrides: overrides) }
             .compactMap(\.promptCache)
         promptAnalysisTask = Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
@@ -388,9 +425,25 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// サイドバーのフォルダツリーのチェック操作。対象ノード配下（自身含む）の既存の個別設定を
+    /// 全て消してから、対象ノード自身にだけ新しい設定を書く（`FolderVisibilityResolver.togglingVisibility`。
+    /// レビュー指摘の修正：当初は対象ノード1件だけを書く方式だったが、それだと子を個別にOFFにした後
+    /// 親を再トグルしても親が`.mixed`のまま動かなくなり、「ルートごと隠す」という最も基本的な操作が
+    /// 不可能になっていた）。
+    func setFolderVisibility(_ isOn: Bool, rootId: Int64, node: FolderNode) {
+        folderVisibilityOverrides = FolderVisibilityResolver.togglingVisibility(
+            isOn, of: node, rootId: rootId, in: folderVisibilityOverrides
+        )
+    }
+
     func removeRoot(id: Int64) {
         do {
             try imageRepository.deleteRoot(id: id)
+            // レビュー指摘の修正：`roots.id`はAUTOINCREMENT無しの`INTEGER PRIMARY KEY`（SQLiteの
+            // rowid）なので、削除した直後に追加した新規ルートが同じIDを再利用しうる。このIDに紐づく
+            // フォルダ可視化の上書きを消しておかないと、無関係な新規ルートが「削除済みルートの
+            // 非表示設定」をそのまま引き継いでしまう。
+            folderVisibilityOverrides = folderVisibilityOverrides.filter { $0.key.rootId != id }
             reloadAll()
         } catch {
             presentAlert(message: "ルートの削除に失敗した", informative: "\(error)")
