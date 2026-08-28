@@ -1,11 +1,11 @@
 import XCTest
 @testable import NAICullerCore
 
-final class BackupMoveServiceTests: XCTestCase {
+final class UniqueFileNamingTests: XCTestCase {
     private let folder = URL(fileURLWithPath: "/tmp/backup")
 
     func testReturnsOriginalNameWhenNoCollision() {
-        let url = BackupMoveService.uniqueDestinationURL(
+        let url = UniqueFileNaming.uniqueDestinationURL(
             for: URL(fileURLWithPath: "/tmp/root/a.png"),
             in: folder,
             existingNames: []
@@ -14,7 +14,7 @@ final class BackupMoveServiceTests: XCTestCase {
     }
 
     func testAppendsSuffixOnCollision() {
-        let url = BackupMoveService.uniqueDestinationURL(
+        let url = UniqueFileNaming.uniqueDestinationURL(
             for: URL(fileURLWithPath: "/tmp/root/a.png"),
             in: folder,
             existingNames: ["a.png"]
@@ -23,7 +23,7 @@ final class BackupMoveServiceTests: XCTestCase {
     }
 
     func testSkipsOverAlreadyTakenSuffixes() {
-        let url = BackupMoveService.uniqueDestinationURL(
+        let url = UniqueFileNaming.uniqueDestinationURL(
             for: URL(fileURLWithPath: "/tmp/root/a.png"),
             in: folder,
             existingNames: ["a.png", "a 2.png", "a 3.png"]
@@ -32,7 +32,7 @@ final class BackupMoveServiceTests: XCTestCase {
     }
 
     func testHandlesFileNameWithoutExtension() {
-        let url = BackupMoveService.uniqueDestinationURL(
+        let url = UniqueFileNaming.uniqueDestinationURL(
             for: URL(fileURLWithPath: "/tmp/root/README"),
             in: folder,
             existingNames: ["README"]
@@ -41,7 +41,7 @@ final class BackupMoveServiceTests: XCTestCase {
     }
 
     func testHandlesNonASCIIFileNames() {
-        let url = BackupMoveService.uniqueDestinationURL(
+        let url = UniqueFileNaming.uniqueDestinationURL(
             for: URL(fileURLWithPath: "/tmp/root/オレンジChibi.png"),
             in: folder,
             existingNames: ["オレンジChibi.png"]

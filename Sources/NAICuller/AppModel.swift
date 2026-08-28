@@ -647,7 +647,7 @@ final class AppModel: ObservableObject {
     }
 
     /// 実際にバックアップフォルダへ移動する（`FileManager.moveItem`）。同名ファイルが既に
-    /// 移動先にあっても上書きせず、`BackupMoveService`で連番を付けて回避する（Finderの
+    /// 移動先にあっても上書きせず、`UniqueFileNaming`で連番を付けて回避する（Finderの
     /// 「コピー - ファイル名 2.png」と同じ考え方）。移動はディスクI/Oを伴うため
     /// メインスレッドをブロックしないよう`Task.detached`で行う（`rescan()`と同じ方針）。
     /// 移動に成功したものだけDBレコードを削除する（トラッシュ移動と同じ考え方）。
@@ -660,7 +660,7 @@ final class AppModel: ObservableObject {
             var succeededTargets: [ImageRecord] = []
             var failedNames: [String] = []
             for image in targets {
-                let destinationURL = BackupMoveService.uniqueDestinationURL(
+                let destinationURL = UniqueFileNaming.uniqueDestinationURL(
                     for: image.url, in: folderURL, existingNames: existingNames
                 )
                 do {
@@ -970,6 +970,48 @@ final class AppModel: ObservableObject {
             showToast("\(images.count)件をエクスポートしました")
         } catch {
             presentAlert(message: "エクスポートに失敗した", informative: "\(error)")
+        }
+    }
+
+    /// 選択画像本体を指定フォルダへコピーする（実際に使ってみてのフィードバックで追加：
+    /// 既存のJSONエクスポートはパス/プロンプト等のメタデータのみで、画像ファイル自体を
+    /// 書き出す手段が無かった。サブディレクトリで絞り込み→削除対象タグ付け→削除対象を除外→
+    /// 残った画像をまるっと作業用ディレクトリへコピー、という使い方を想定）。
+    /// コピーなので元ファイルはそのまま残り、DBレコードも変更しない（バックアップ移動と違い
+    /// 「移動」ではないため`imageRepository`には一切触れない）。同名衝突時は`UniqueFileNaming`
+    /// （バックアップ移動機能と共通）で連番を付けて回避する。
+    func copyImagesToFolder(_ images: [ImageRecord], to folderURL: URL) {
+        guard !images.isEmpty else { return }
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            let fileManager = FileManager.default
+            var existingNames = Set((try? fileManager.contentsOfDirectory(atPath: folderURL.path)) ?? [])
+            var succeededCount = 0
+            var failedNames: [String] = []
+            for image in images {
+                let destinationURL = UniqueFileNaming.uniqueDestinationURL(
+                    for: image.url, in: folderURL, existingNames: existingNames
+                )
+                do {
+                    try fileManager.copyItem(at: image.url, to: destinationURL)
+                    existingNames.insert(destinationURL.lastPathComponent)
+                    succeededCount += 1
+                } catch {
+                    failedNames.append(image.url.lastPathComponent)
+                }
+            }
+            let finalSucceededCount = succeededCount
+            let finalFailedNames = failedNames
+            await MainActor.run {
+                if finalFailedNames.isEmpty {
+                    self.showToast("\(finalSucceededCount)件の画像をコピーしたよ")
+                } else {
+                    self.presentAlert(
+                        message: "一部のコピーに失敗した",
+                        informative: "\(finalSucceededCount)件成功・\(finalFailedNames.count)件失敗。\(FailureSummary.text(names: finalFailedNames))"
+                    )
+                }
+            }
         }
     }
 
