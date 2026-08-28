@@ -76,11 +76,25 @@ extension ThumbnailGridView.Coordinator {
         }
 
         menu.addItem(.separator())
-        let exportTitle = targets.count > 1 ? "選択中の\(targets.count)件をエクスポート..." : "この画像をエクスポート..."
-        let exportItem = NSMenuItem(title: exportTitle, action: #selector(exportImagesFromMenu(_:)), keyEquivalent: "")
-        exportItem.target = self
-        exportItem.representedObject = targets.map(\.id)
-        menu.addItem(exportItem)
+        // JSON（パス・プロンプト等のメタデータ）／画像ファイル本体コピーの2択サブメニュー。
+        // ツールバーのエクスポートボタン（SwiftUIのセグメントピッカー）と同じ2モードだが、
+        // NSMenuにはポップオーバーを出せないのでサブメニュー形式にしてある
+        // （レビュー指摘の修正：ツールバー側だけ画像ファイルモードを追加し、右クリック側を
+        // 直し忘れていた。同じ「エクスポート」という名前の入口が2つあるのに挙動が違うのは
+        // 混乱の元なので、必ず両方揃える）。
+        let exportTitle = targets.count > 1 ? "選択中の\(targets.count)件をエクスポート" : "この画像をエクスポート"
+        let exportMenuItem = NSMenuItem(title: exportTitle, action: nil, keyEquivalent: "")
+        let exportSubmenu = NSMenu()
+        let exportJSONItem = NSMenuItem(title: "JSON（パス・プロンプト）...", action: #selector(exportImagesFromMenu(_:)), keyEquivalent: "")
+        exportJSONItem.target = self
+        exportJSONItem.representedObject = targets.map(\.id)
+        exportSubmenu.addItem(exportJSONItem)
+        let exportFilesItem = NSMenuItem(title: "画像ファイルをコピー...", action: #selector(exportImageFilesFromMenu(_:)), keyEquivalent: "")
+        exportFilesItem.target = self
+        exportFilesItem.representedObject = targets.map(\.id)
+        exportSubmenu.addItem(exportFilesItem)
+        exportMenuItem.submenu = exportSubmenu
+        menu.addItem(exportMenuItem)
 
         // 「削除対象」タグが付いた画像だけを対象にした移動（ゴミ箱／バックアップフォルダ）。
         // ツールバーの「削除」メニューと同じAppModelロジックをそのまま呼ぶ（対象の絞り込みは
@@ -198,6 +212,21 @@ extension ThumbnailGridView.Coordinator {
         panel.allowedContentTypes = [.json]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         parent.appModel.exportImages(targetImages, fields: ExportFieldKind.allCases, to: url)
+    }
+
+    @objc private func exportImageFilesFromMenu(_ sender: NSMenuItem) {
+        guard let imageIds = sender.representedObject as? [Int64] else { return }
+        let targetImages = images.filter { imageIds.contains($0.id) }
+        guard !targetImages.isEmpty else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "選択"
+        panel.message = "コピー先のフォルダを選んでね"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        parent.appModel.copyImagesToFolder(targetImages, to: url)
     }
 
     @objc private func moveMarkedToTrashFromMenu(_ sender: NSMenuItem) {
