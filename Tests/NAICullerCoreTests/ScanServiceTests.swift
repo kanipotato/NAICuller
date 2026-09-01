@@ -185,6 +185,63 @@ final class ScanServiceTests: XCTestCase {
         XCTAssertTrue(tags.contains { $0.name == "お気に入り" && $0.isSystem })
     }
 
+    /// Stable Diffusion(ComfyUI)対応：スキャン時に生成元プラットフォームが判定・保存されること。
+    func testSourcePlatformIsDetectedAndPersistedDuringScan() throws {
+        let naiURL = try writeDummyPNG("nai.png")
+        let comfyURL = try writeDummyPNG("comfy.png")
+        let unknownURL = try writeDummyPNG("unknown.png")
+
+        fakeExifTool.metadataForPath[naiURL.path] = ExifMetadata(
+            promptDescription: "1girl, chibi", width: 100, height: 100, software: "NovelAI",
+            naiCommentJSON: #"{"seed": 999, "steps": 28}"#, tagNames: []
+        )
+        fakeExifTool.metadataForPath[comfyURL.path] = ExifMetadata(
+            promptDescription: nil, width: 100, height: 100, software: nil,
+            comfyPromptJSON: #"{"CheckpointLoaderSimple.0": {"class_type": "CheckpointLoaderSimple", "inputs": {}}}"#,
+            tagNames: []
+        )
+        fakeExifTool.metadataForPath[unknownURL.path] = ExifMetadata(
+            promptDescription: nil, width: 100, height: 100, software: nil, tagNames: []
+        )
+
+        _ = try imageRepo.insertRoot(path: tempDir.path)
+        let root = try imageRepo.fetchAllRoots().first!
+        _ = try scanService.scan(roots: [root])
+
+        XCTAssertEqual(try imageRepo.fetchImage(byPath: naiURL.path)?.sourcePlatform, .novelAI)
+        XCTAssertEqual(try imageRepo.fetchImage(byPath: naiURL.path)?.naiGenerationInfoJSON, #"{"seed": 999, "steps": 28}"#)
+        XCTAssertEqual(try imageRepo.fetchImage(byPath: comfyURL.path)?.sourcePlatform, .comfyUI)
+        XCTAssertNotNil(try imageRepo.fetchImage(byPath: comfyURL.path)?.comfyGenerationInfoJSON)
+        XCTAssertEqual(try imageRepo.fetchImage(byPath: unknownURL.path)?.sourcePlatform, .unknown)
+    }
+
+    /// 設定画面「強制再スキャン」対応：mtime/file_sizeが変わっていなくても
+    /// `forceFullRescan: true`で全ファイルがExifToolで再読み込みされること。
+    func testForceFullRescanRereadsUnchangedFiles() throws {
+        let fileURL = try writeDummyPNG("a.png")
+        _ = try imageRepo.insertRoot(path: tempDir.path)
+        let root = try imageRepo.fetchAllRoots().first!
+        _ = try scanService.scan(roots: [root])
+        XCTAssertEqual(fakeExifTool.readCallCount, 1)
+
+        // ファイルは一切変更していない（mtime/file_sizeとも同じ）。
+        fakeExifTool.metadataForPath[fileURL.path] = ExifMetadata(
+            promptDescription: "再読込後のプロンプト", width: 100, height: 100, software: "NovelAI", tagNames: []
+        )
+
+        let normalResult = try scanService.scan(roots: [root])
+        XCTAssertEqual(normalResult.unchangedImageCount, 1)
+        XCTAssertEqual(fakeExifTool.readCallCount, 1, "通常スキャンでは再読み込みされないはず")
+
+        let forcedResult = try scanService.scan(roots: [root], forceFullRescan: true)
+        XCTAssertEqual(fakeExifTool.readCallCount, 2, "強制再スキャンでは変更が無くても再読み込みされるはず")
+        XCTAssertEqual(forcedResult.forcedRereadCount, 1)
+        // pixelは変わっていないのでサムネイル無効化対象(changedImageIds)には含めない。
+        XCTAssertTrue(forcedResult.changedImageIds.isEmpty)
+        // DBには新しいメタデータが反映されている。
+        XCTAssertEqual(try imageRepo.fetchImage(byPath: fileURL.path)?.promptCache, "再読込後のプロンプト")
+    }
+
     func testTagsRemovedFromFileAreUnsyncedOnUpdate() throws {
         let fileURL = try writeDummyPNG("a.png")
         fakeExifTool.metadataForPath[fileURL.path] = ExifMetadata(

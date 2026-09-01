@@ -1,34 +1,50 @@
 import SwiftUI
 import NAICullerCore
 
-/// サイドバー：登録ルート一覧（チェックボックス）・タグ一覧（`:`を含むタグは自動グルーピング）。
+/// サイドバー：生成元一覧・登録ルートのフォルダツリー（サブディレクトリ階層フィルタ）・
+/// タグ一覧（`:`を含むタグは自動グルーピング）。
 struct SidebarView: View {
     @EnvironmentObject private var appModel: AppModel
 
     var body: some View {
         List {
-            Section("ルート") {
-                ForEach(appModel.roots) { root in
+            // Stable Diffusion(ComfyUI)対応で追加。フラットなSetでON/OFFを持つシンプルな
+            // チェックボックス絞り込み（旧「ルート」セクションが使っていたのと同じパターン。
+            // 「ルート」セクション自体はその後フォルダツリー化されたため、今はこちらだけがこの形）。
+            Section("生成元") {
+                ForEach(ImageSourcePlatform.allCases) { platform in
                     HStack {
                         Toggle(isOn: Binding(
-                            get: { appModel.enabledRootIds.contains(root.id) },
+                            get: { appModel.enabledSourcePlatforms.contains(platform) },
                             set: { isOn in
-                                if isOn { appModel.enabledRootIds.insert(root.id) }
-                                else { appModel.enabledRootIds.remove(root.id) }
+                                if isOn { appModel.enabledSourcePlatforms.insert(platform) }
+                                else { appModel.enabledSourcePlatforms.remove(platform) }
                             }
                         )) {
-                            Text((root.path as NSString).lastPathComponent)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
+                            Text(platform.displayName)
                         }
                         .toggleStyle(.checkbox)
-                        if appModel.rootWarnings[root.path] != nil {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                                .help(appModel.rootWarnings[root.path] ?? "")
-                        }
+                        Spacer()
+                        Text("\(platformCount(platform))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                    .help(root.path)
+                }
+            }
+
+            // サブディレクトリ階層フィルタ機能で、旧「ルートのフラットなON/OFFチェックボックス」から
+            // VSCode風の展開可能なフォルダツリーに置き換えた（ルート直下ノードが旧enabledRootIdsと
+            // 同じ役割を果たす）。
+            Section("ルート") {
+                ForEach(appModel.roots) { root in
+                    if let tree = appModel.folderTrees[root.id] {
+                        FolderTreeRowView(
+                            rootId: root.id,
+                            node: tree,
+                            warning: appModel.rootWarnings[root.path],
+                            tooltip: root.path
+                        )
+                    }
                 }
             }
 
@@ -49,6 +65,11 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+    }
+
+    /// 生成元ごとの画像枚数（フィルタ前の全件が対象。タグ件数表示と同じ「絞り込みの外側の全体数」）。
+    private func platformCount(_ platform: ImageSourcePlatform) -> Int {
+        appModel.images.lazy.filter { $0.sourcePlatform == platform }.count
     }
 
     private func tagRow(_ tag: Tag, displayName: String) -> some View {

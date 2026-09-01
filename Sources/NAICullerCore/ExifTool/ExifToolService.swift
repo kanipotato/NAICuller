@@ -8,14 +8,32 @@ public struct ExifMetadata: Equatable, Sendable {
     public var height: Int?
     /// PNG:Software。"NovelAI"ならNovelAI生成画像と判定できる。
     public var software: String?
+    /// PNG:Prompt。ComfyUIのAPIフォーマット・ワークフロー（ノードグラフ）がJSON文字列で
+    /// 入っている。NovelAI画像には存在しない（実データ調査で確認：`ImageSourcePlatform.detect`
+    /// の判定・`ComfyUIWorkflowParser`での生成情報抽出の元データとして使う）。
+    public var comfyPromptJSON: String?
+    /// PNG:Comment。NovelAI画像にだけ入っている生成パラメータ全体のJSON文字列
+    /// （`seed`/`steps`/`scale`/`sampler`/`uc`(ネガティブプロンプト)等をトップレベルキーに持つ。
+    /// 実データ調査で確認済み：`NAIGenerationInfoParser`での抽出の元データとして使う）。
+    public var naiCommentJSON: String?
     /// XMP:Subject（本アプリが書き込んだタグ名の一覧）。
     public var tagNames: [String]
 
-    public init(promptDescription: String?, width: Int?, height: Int?, software: String?, tagNames: [String]) {
+    public init(
+        promptDescription: String?,
+        width: Int?,
+        height: Int?,
+        software: String?,
+        comfyPromptJSON: String? = nil,
+        naiCommentJSON: String? = nil,
+        tagNames: [String]
+    ) {
         self.promptDescription = promptDescription
         self.width = width
         self.height = height
         self.software = software
+        self.comfyPromptJSON = comfyPromptJSON
+        self.naiCommentJSON = naiCommentJSON
         self.tagNames = tagNames
     }
 }
@@ -91,6 +109,8 @@ public final class ExifToolService: ExifMetadataReading {
             width: (json["PNG:ImageWidth"] as? NSNumber)?.intValue,
             height: (json["PNG:ImageHeight"] as? NSNumber)?.intValue,
             software: json["PNG:Software"] as? String,
+            comfyPromptJSON: json["PNG:Prompt"] as? String,
+            naiCommentJSON: json["PNG:Comment"] as? String,
             tagNames: Self.stringList(json["XMP:Subject"])
         )
     }

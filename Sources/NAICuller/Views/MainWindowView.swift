@@ -64,16 +64,17 @@ struct MainWindowView: View {
         } message: {
             Text(rootAdditionError ?? "")
         }
-        // 「削除対象」タグ付き画像のゴミ箱移動確認。完全削除ではなくゴミ箱移動なので復元は可能だが、
-        // 予期しない範囲を消さないよう必ず件数を見せてから確認する（他の削除系操作と同じ流儀）。
-        .alert("ゴミ箱へ移動しますか？", isPresented: Binding(
-            get: { appModel.pendingDeletionScope != nil },
-            set: { if !$0 { appModel.cancelDeleteMarkedImages() } }
+        // 「削除対象」タグ付き画像の移動確認（ゴミ箱／バックアップフォルダの2択）。
+        // 完全削除は一切しないが、予期しない範囲を動かさないよう必ず件数を見せてから確認する
+        // （他の削除系操作と同じ流儀）。
+        .alert(deletionAlertTitle, isPresented: Binding(
+            get: { appModel.pendingDeletion != nil },
+            set: { if !$0 { appModel.cancelPendingDeletion() } }
         )) {
-            Button("ゴミ箱へ移動", role: .destructive) { appModel.confirmDeleteMarkedImages() }
-            Button("キャンセル", role: .cancel) { appModel.cancelDeleteMarkedImages() }
+            Button(deletionConfirmButtonTitle, role: .destructive) { appModel.confirmPendingDeletion() }
+            Button("キャンセル", role: .cancel) { appModel.cancelPendingDeletion() }
         } message: {
-            Text("「削除対象」タグが付いた画像\(appModel.pendingDeletionCount)件をゴミ箱へ移動します。ゴミ箱からは復元できます。")
+            Text(deletionAlertMessage)
         }
         // シート分割のやり直し（余白調整）。isPresented形式のalertだとスライダーを置けないので、
         // 他のモーダルと違いここだけ.sheet(item:)にしている。
@@ -157,26 +158,52 @@ struct MainWindowView: View {
             ShortcutsHelpButton()
         }
 
-        // 「削除対象」タグが付いた画像だけをゴミ箱へ移動するメニュー（実際に使ってみての
-        // フィードバックで追加）。対象が1件も無ければ押しても意味が無いので無効化しておく。
+        // 「削除対象」タグが付いた画像だけを移動するメニュー（実際に使ってみてのフィードバックで
+        // 追加）。移動先はゴミ箱／バックアップフォルダの2択（「何かに使うかもしれないから完全に
+        // 消したくない」という要望で追加）。対象が1件も無ければ押しても意味が無いので無効化しておく。
         ToolbarItem {
             Menu {
-                Button("選択中の削除対象を削除...") {
-                    appModel.requestDeleteSelectedMarkedImages()
+                Menu("選択中の削除対象を移動") {
+                    Button("ゴミ箱へ") { appModel.requestMoveSelectedMarkedImages(to: .trash) }
+                    Button("バックアップフォルダへ...") { appModel.chooseBackupFolderAndRequestMove(scope: .selected) }
                 }
                 // コードレビュー指摘の修正：「削除対象を除外」中は削除対象がグリッドから
                 // 消えている＝選択にも残らない（refreshFilteredImagesが選択を可視分に
                 // 絞り込む）ので、この項目は絶対に成立しない。押せてしまうと
                 // 「選択中に削除対象が無いよ」と言われるだけなので、最初から無効化する。
                 .disabled(appModel.selectedImageIds.isEmpty || appModel.hideDeletionMarked)
-                Button("削除対象を全て削除...") {
-                    appModel.requestDeleteAllMarkedImages()
+                Menu("削除対象を全て移動") {
+                    Button("ゴミ箱へ") { appModel.requestMoveAllMarkedImages(to: .trash) }
+                    Button("バックアップフォルダへ...") { appModel.chooseBackupFolderAndRequestMove(scope: .all) }
                 }
             } label: {
                 Label("削除", systemImage: "trash")
             }
             .disabled(deletionMarkCount == 0)
-            .help("「削除対象」タグが付いた画像をゴミ箱へ移動する")
+            .help("「削除対象」タグが付いた画像をゴミ箱またはバックアップフォルダへ移動する")
+        }
+    }
+
+    private var deletionAlertTitle: String {
+        switch appModel.pendingDeletion?.destination {
+        case .backupFolder: return "バックアップフォルダへ移動しますか？"
+        case .trash, nil: return "ゴミ箱へ移動しますか？"
+        }
+    }
+
+    private var deletionConfirmButtonTitle: String {
+        switch appModel.pendingDeletion?.destination {
+        case .backupFolder: return "移動"
+        case .trash, nil: return "ゴミ箱へ移動"
+        }
+    }
+
+    private var deletionAlertMessage: String {
+        switch appModel.pendingDeletion?.destination {
+        case .backupFolder(let url):
+            return "「削除対象」タグが付いた画像\(appModel.pendingDeletionCount)件を「\(url.lastPathComponent)」へ移動します。"
+        case .trash, nil:
+            return "「削除対象」タグが付いた画像\(appModel.pendingDeletionCount)件をゴミ箱へ移動します。ゴミ箱からは復元できます。"
         }
     }
 

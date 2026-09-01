@@ -46,7 +46,17 @@ final class AppModel: ObservableObject {
 
     // MARK: - Published state
 
-    @Published private(set) var roots: [Root] = []
+    /// レビュー指摘の修正：旧`enabledRootIds`の`didSet`が担っていた「rootsが変わったら絞り込みを
+    /// 再計算する」という反応の連鎖が、置き換え後に失われていた（`rootPaths`は算出プロパティのみで
+    /// フックが無かった）。ルート追加直後、ExifTool未導入などで`rescan()`が早期returnして
+    /// `reloadImages()`まで届かないケースで、新規ルートのフォルダツリーがサイドバーに一切表示されない
+    /// 実害があったため、`didSet`で明示的に再構築する。
+    @Published private(set) var roots: [Root] = [] {
+        didSet {
+            rebuildFolderTrees()
+            refreshFilteredImages()
+        }
+    }
     @Published private(set) var rootWarnings: [String: String] = [:] // rootPath -> reason
     @Published private(set) var tags: [Tag] = []
     @Published private(set) var tagCounts: [Int64: Int] = [:]
@@ -77,11 +87,16 @@ final class AppModel: ObservableObject {
             }
         }
     }
-    /// サイドバーのルートチェックボックスで有効化されているルート（未チェックのルート配下の画像は
-    /// グリッドから一時的に除外する。DBからは削除しない表示フィルタ）。
-    @Published var enabledRootIds: Set<Int64> = [] {
+    /// サイドバーのフォルダツリーで明示的にON/OFFされたフォルダ（サブディレクトリ階層フィルタ機能）。
+    /// キーが無いフォルダは表示扱い（デフォルト）。「最も近い祖先の設定が勝つ」方式で実効の表示/非表示を
+    /// 解決する（`FolderVisibilityResolver`）。旧`enabledRootIds`（ルート丸ごとON/OFF）はこれに統合され
+    /// 廃止した：ツリーのルート直下ノード（`relativePath: ""`）が同じ役割を果たすため。
+    @Published var folderVisibilityOverrides: [FolderVisibilityKey: Bool] = [:] {
         didSet { refreshFilteredImages() }
     }
+    /// ルートIDごとのフォルダツリー（サイドバー表示用）。`reloadImages()`のたびに再構築する
+    /// （DBスキーマは変更せず、画像一覧から都度メモリ上に組み立てるキャッシュ）。
+    @Published private(set) var folderTrees: [Int64: FolderNode] = [:]
     /// プロンプト本文に対する部分一致検索（大文字小文字は区別しない）。空文字なら絞り込まない。
     /// タグを付ける前の画像を「プロンプトの内容」で見つけるための入り口として追加した。
     ///
@@ -141,6 +156,10 @@ final class AppModel: ObservableObject {
             }
         }
     }
+    /// サイドバー「生成元」でチェックが入っているプラットフォーム（Stable Diffusion/ComfyUI対応で追加）。
+    @Published var enabledSourcePlatforms: Set<ImageSourcePlatform> = Set(ImageSourcePlatform.allCases) {
+        didSet { refreshFilteredImages() }
+    }
     @Published var selectedImageIds: Set<Int64> = []
     @Published var focusedImageId: Int64?
     @Published var thumbnailSize: ThumbnailSize = .medium
@@ -152,13 +171,25 @@ final class AppModel: ObservableObject {
     @Published var pendingOrphans: [(id: Int64, path: String)] = []
     @Published var showOrphanConfirmation = false
 
-    /// 「削除対象」タグ付き画像のゴミ箱移動範囲。確認ダイアログを出す前の下ごしらえとして
-    /// nil以外を保持する（実際の移動はconfirmDeleteMarkedImages()を呼ぶまで実行しない）。
-    enum DeletionScope {
+    /// 「削除対象」タグ付き画像の移動範囲。
+    enum DeletionScope: Equatable {
         case selected
         case all
     }
-    @Published var pendingDeletionScope: DeletionScope?
+    /// 移動先（ゴミ箱 or ユーザーが選んだバックアップフォルダ）。バックアップフォルダは
+    /// 「何かに使うかもしれないから完全に消したくない」というフィードバックで追加した
+    /// （実際に使ってみての要望：ゴミ箱移動と選べるようにしたい）。
+    enum DeletionDestination: Equatable {
+        case trash
+        case backupFolder(URL)
+    }
+    /// 確認ダイアログを出す前の下ごしらえとして nil以外を保持する
+    /// （実際の移動はconfirmPendingDeletion()を呼ぶまで実行しない）。
+    struct PendingDeletion: Equatable {
+        var scope: DeletionScope
+        var destination: DeletionDestination
+    }
+    @Published var pendingDeletion: PendingDeletion?
     @Published private(set) var pendingDeletionCount: Int = 0
 
     private var toastDismissTask: Task<Void, Never>?
@@ -250,13 +281,14 @@ final class AppModel: ObservableObject {
     }
 
     func reloadRoots() {
-        let previousIds = Set(roots.map(\.id))
+        // 新規ルートのデフォルト有効化は`folderVisibilityOverrides`の「キーが無ければ表示」という
+        // デフォルトで自動的に成り立つため、旧`enabledRootIds`にあった追跡コード（前回IDとの差分計算）は不要。
         roots = (try? imageRepository.fetchAllRoots()) ?? []
-        let currentIds = Set(roots.map(\.id))
-        // 新規に増えたルート（前回時点で知らなかったID）はデフォルト有効にする。
-        let newlyAddedIds = currentIds.subtracting(previousIds)
-        enabledRootIds.formIntersection(currentIds) // 削除済みルートのIDは外す
-        enabledRootIds.formUnion(newlyAddedIds) // 新規ルートを有効化（既存ルートの手動OFFは保持）
+    }
+
+    /// rootId→ルート絶対パス。フィルタ条件（`ImageFilterCriteria.rootPaths`）用。
+    private var rootPaths: [Int64: String] {
+        Dictionary(uniqueKeysWithValues: roots.map { ($0.id, $0.path) })
     }
 
     func reloadTags() {
@@ -275,20 +307,35 @@ final class AppModel: ObservableObject {
         imageTagIds = images.reduce(into: [Int64: Set<Int64>]()) { mapping, image in
             mapping[image.id] = allTagIds[image.id] ?? []
         }
+        rebuildFolderTrees()
         refreshFilteredImages()
     }
 
-    /// サイドバーのルートチェックボックス・タグ絞り込み（AND条件：選択した全タグを持つ画像のみ）・
+    /// `folderTrees`を`images`の現在の内容から再構築する。`reloadImages()`（タグ付けのたびに呼ばれる
+    /// ホットパス）と`roots`の`didSet`の両方から呼ぶため、レビュー指摘の修正：ルートごとに`images`
+    /// 全体を毎回スキャンする（O(画像数×ルート数)）のを避け、`Dictionary(grouping:)`で1回だけ
+    /// ルートIDごとに振り分けてから、各ルートは自分の分だけを`FolderTreeBuilder.build`に渡す
+    /// （O(画像数)に削減）。
+    private func rebuildFolderTrees() {
+        let imagesByRoot = Dictionary(grouping: images, by: \.rootId)
+        folderTrees = Dictionary(uniqueKeysWithValues: roots.map { root in
+            (root.id, FolderTreeBuilder.build(images: imagesByRoot[root.id] ?? [], root: root))
+        })
+    }
+
+    /// サイドバーのフォルダツリー絞り込み・タグ絞り込み（AND条件：選択した全タグを持つ画像のみ）・
     /// プロンプト検索・プロンプト候補絞り込み・削除対象の除外を適用し、`sortOrder`で並び替えた
     /// 結果を`filteredImages`に反映する。
     private func refreshFilteredImages() {
         let criteria = ImageFilterCriteria(
-            enabledRootIds: enabledRootIds,
+            rootPaths: rootPaths,
+            folderVisibilityOverrides: folderVisibilityOverrides,
             selectedTagIds: selectedTagIds,
             showUntaggedOnly: showUntaggedOnly,
             hiddenDeletionMarkTagId: hideDeletionMarked ? deletionMarkTagId() : nil,
             promptSearchText: promptSearchText,
-            selectedPromptTerms: selectedPromptTerms
+            selectedPromptTerms: selectedPromptTerms,
+            enabledSourcePlatforms: enabledSourcePlatforms
         )
         let narrowed = ImageFilter.apply(
             to: images,
@@ -320,17 +367,24 @@ final class AppModel: ObservableObject {
         return terms
     }
 
-    /// 「有効なルート」内の画像プロンプトを分析し、`promptCandidates`を更新する
+    /// 「フォルダツリーで表示中」の画像プロンプトを分析し、`promptCandidates`を更新する
     /// （プロンプト候補絞り込みポップオーバーを開いたとき・再分析ボタンで呼ぶ）。
-    /// タグ絞り込みや既存のプロンプト検索は意図的に無視する：あくまで「今見えているルート内に
+    /// タグ絞り込みや既存のプロンプト検索は意図的に無視する：あくまで「今見えているフォルダ内に
     /// どんなプロンプトがあるか」の全体像を示す入り口なので、他の絞り込み条件で候補自体が
-    /// 先細りしていく（後から使いたかった語句が候補から消える）のを避けるため。
+    /// 先細りしていく（後から使いたかった語句が候補から消える）のを避けるため
+    /// （サブディレクトリ階層フィルタでフォルダ単位に表示/非表示を細かく分けられるようになったため、
+    /// この「無視する」対象にフォルダツリーの絞り込みは含まれない＝ツリーで隠したフォルダの
+    /// プロンプトは候補にも出さない、という仕様）。
     func analyzePromptCandidates() {
         // コードレビュー指摘の修正：前回の分析が走っていれば捨てる（結果の追い越しを防ぐ）。
         promptAnalysisTask?.cancel()
         isAnalyzingPromptCandidates = true
+        // レビュー指摘の修正：`ImageFilter.apply`と同じ3段階判定を書き下していた（二重実装）。
+        // `FolderVisibilityResolver.isImageVisible`に集約する。
+        let paths = rootPaths
+        let overrides = folderVisibilityOverrides
         let prompts = images
-            .filter { enabledRootIds.contains($0.rootId) }
+            .filter { FolderVisibilityResolver.isImageVisible($0, rootPaths: paths, overrides: overrides) }
             .compactMap(\.promptCache)
         promptAnalysisTask = Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
@@ -383,9 +437,25 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// サイドバーのフォルダツリーのチェック操作。対象ノード配下（自身含む）の既存の個別設定を
+    /// 全て消してから、対象ノード自身にだけ新しい設定を書く（`FolderVisibilityResolver.togglingVisibility`。
+    /// レビュー指摘の修正：当初は対象ノード1件だけを書く方式だったが、それだと子を個別にOFFにした後
+    /// 親を再トグルしても親が`.mixed`のまま動かなくなり、「ルートごと隠す」という最も基本的な操作が
+    /// 不可能になっていた）。
+    func setFolderVisibility(_ isOn: Bool, rootId: Int64, node: FolderNode) {
+        folderVisibilityOverrides = FolderVisibilityResolver.togglingVisibility(
+            isOn, of: node, rootId: rootId, in: folderVisibilityOverrides
+        )
+    }
+
     func removeRoot(id: Int64) {
         do {
             try imageRepository.deleteRoot(id: id)
+            // レビュー指摘の修正：`roots.id`はAUTOINCREMENT無しの`INTEGER PRIMARY KEY`（SQLiteの
+            // rowid）なので、削除した直後に追加した新規ルートが同じIDを再利用しうる。このIDに紐づく
+            // フォルダ可視化の上書きを消しておかないと、無関係な新規ルートが「削除済みルートの
+            // 非表示設定」をそのまま引き継いでしまう。
+            folderVisibilityOverrides = folderVisibilityOverrides.filter { $0.key.rootId != id }
             reloadAll()
         } catch {
             presentAlert(message: "ルートの削除に失敗した", informative: "\(error)")
@@ -394,12 +464,16 @@ final class AppModel: ObservableObject {
 
     // MARK: - スキャン
 
-    func rescan() {
+    /// - Parameter forceFullRescan: trueの場合、変更の無いファイルも含めて全件ExifToolで
+    ///   再読み込みする（設定画面の「強制再スキャン」用）。アプリのアップデートでメタデータの
+    ///   読み取り項目が増えた際、v1時代からの既存画像には通常の差分スキャンでは反映されない
+    ///   ための救済手段（実際に踏んだ実例：source_platform・生成パラメータ対応）。
+    func rescan(forceFullRescan: Bool = false) {
         guard let scanService, !isScanning else { return }
         isScanning = true
         let targets = roots
         Task.detached(priority: .userInitiated) { [weak self] in
-            let result = try? scanService.scan(roots: targets)
+            let result = try? scanService.scan(roots: targets, forceFullRescan: forceFullRescan)
             guard let self else { return }
             await MainActor.run {
                 self.isScanning = false
@@ -420,7 +494,12 @@ final class AppModel: ObservableObject {
                     self.pendingOrphans = result.orphanImages
                     self.showOrphanConfirmation = true
                 }
-                self.showToast("スキャン完了: 新規\(result.newImageCount)件・更新\(result.updatedImageCount)件")
+                if forceFullRescan {
+                    let total = result.updatedImageCount + result.forcedRereadCount
+                    self.showToast("強制再スキャン完了: \(total)件を再読み込みしたよ")
+                } else {
+                    self.showToast("スキャン完了: 新規\(result.newImageCount)件・更新\(result.updatedImageCount)件")
+                }
             }
         }
     }
@@ -443,47 +522,71 @@ final class AppModel: ObservableObject {
         showOrphanConfirmation = false
     }
 
-    // MARK: - 削除対象タグの一括削除（実際に使ってみてのフィードバックで追加）
+    // MARK: - 削除対象タグの一括移動（実際に使ってみてのフィードバックで追加）
     //
     // ドラフト段階の設計方針「アプリはファイルシステムに破壊的操作をしない」から意図的に外れる
-    // 唯一の例外。ドラフトの「懸念・未解決」でも「ゴミ箱移動(NSWorkspace.recycle)は初版スコープ外。
+    // 例外。ドラフトの「懸念・未解決」でも「ゴミ箱移動(NSWorkspace.recycle)は初版スコープ外。
     // 将来必要なら追加検討」と明記していた、その"将来"が実際に来た形。事故を避けるため、
-    // 完全削除ではなく常にゴミ箱移動（復元可能）にし、対象は常に「削除対象タグが付いている画像」
-    // だけに厳密に絞る（選択に紛れ込んだ未タグの画像は対象外として黙って除外する）。
+    // 完全削除は一切せず、対象は常に「削除対象タグが付いている画像」だけに厳密に絞る
+    // （選択に紛れ込んだ未タグの画像は対象外として黙って除外する）。移動先は「ゴミ箱」（復元可能）
+    // か「ユーザーが選んだバックアップフォルダ」の2択（実際に使ってみての要望：「何かに使うかも
+    // しれないから完全に消したくない、バックアップフォルダへ移動したい」で追加）。
 
     /// 選択中の画像のうち「削除対象」タグが付いているものだけを数え、確認ダイアログの表示を要求する。
-    /// 実際の移動はconfirmDeleteMarkedImages()を呼ぶまで実行しない。
-    func requestDeleteSelectedMarkedImages() {
+    /// 実際の移動はconfirmPendingDeletion()を呼ぶまで実行しない。
+    func requestMoveSelectedMarkedImages(to destination: DeletionDestination) {
         let targets = selectedMarkedImages()
         guard !targets.isEmpty else {
             showToast("選択中に「削除対象」タグの画像が無いよ")
             return
         }
         pendingDeletionCount = targets.count
-        pendingDeletionScope = .selected
+        pendingDeletion = PendingDeletion(scope: .selected, destination: destination)
     }
 
     /// ライブラリ全体で「削除対象」タグが付いている画像（選択状態やフィルタとは無関係）を数え、
     /// 確認ダイアログの表示を要求する。
-    func requestDeleteAllMarkedImages() {
+    func requestMoveAllMarkedImages(to destination: DeletionDestination) {
         let targets = allMarkedImages()
         guard !targets.isEmpty else {
             showToast("「削除対象」タグの画像が無いよ")
             return
         }
         pendingDeletionCount = targets.count
-        pendingDeletionScope = .all
+        pendingDeletion = PendingDeletion(scope: .all, destination: destination)
     }
 
-    func confirmDeleteMarkedImages() {
-        guard let scope = pendingDeletionScope else { return }
-        let targets = scope == .selected ? selectedMarkedImages() : allMarkedImages()
-        pendingDeletionScope = nil
-        performTrashDeletion(targets)
+    /// バックアップフォルダを選ぶダイアログを出し、選ばれたら移動を要求する
+    /// （確認ダイアログはこの後`pendingDeletion`経由で別途出る）。キャンセル時は何もしない。
+    func chooseBackupFolderAndRequestMove(scope: DeletionScope) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "選択"
+        panel.message = "移動先のバックアップフォルダを選んでね"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        switch scope {
+        case .selected: requestMoveSelectedMarkedImages(to: .backupFolder(url))
+        case .all: requestMoveAllMarkedImages(to: .backupFolder(url))
+        }
     }
 
-    func cancelDeleteMarkedImages() {
-        pendingDeletionScope = nil
+    func confirmPendingDeletion() {
+        guard let pending = pendingDeletion else { return }
+        let targets = pending.scope == .selected ? selectedMarkedImages() : allMarkedImages()
+        pendingDeletion = nil
+        switch pending.destination {
+        case .trash:
+            performTrashDeletion(targets)
+        case .backupFolder(let url):
+            performBackupMove(targets, to: url)
+        }
+    }
+
+    func cancelPendingDeletion() {
+        pendingDeletion = nil
     }
 
     private func deletionMarkTagId() -> Int64? {
@@ -537,6 +640,61 @@ final class AppModel: ObservableObject {
                     self.presentAlert(
                         message: "一部の移動に失敗した",
                         informative: "\(succeededTargets.count)件成功・\(failedCount)件失敗。\(error.map { "\($0)" } ?? "")"
+                    )
+                }
+            }
+        }
+    }
+
+    /// 実際にバックアップフォルダへ移動する（`FileManager.moveItem`）。同名ファイルが既に
+    /// 移動先にあっても上書きせず、`UniqueFileNaming`で連番を付けて回避する（Finderの
+    /// 「コピー - ファイル名 2.png」と同じ考え方）。移動はディスクI/Oを伴うため
+    /// メインスレッドをブロックしないよう`Task.detached`で行う（`rescan()`と同じ方針）。
+    /// 移動に成功したものだけDBレコードを削除する（トラッシュ移動と同じ考え方）。
+    private func performBackupMove(_ targets: [ImageRecord], to folderURL: URL) {
+        guard !targets.isEmpty else { return }
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            let fileManager = FileManager.default
+            var existingNames = Set((try? fileManager.contentsOfDirectory(atPath: folderURL.path)) ?? [])
+            var succeededTargets: [ImageRecord] = []
+            var failedNames: [String] = []
+            for image in targets {
+                let destinationURL = UniqueFileNaming.uniqueDestinationURL(
+                    for: image.url, in: folderURL, existingNames: existingNames
+                )
+                do {
+                    try fileManager.moveItem(at: image.url, to: destinationURL)
+                    existingNames.insert(destinationURL.lastPathComponent)
+                    succeededTargets.append(image)
+                } catch {
+                    failedNames.append(image.url.lastPathComponent)
+                }
+            }
+            // `var`のままTask.detachedとMainActor.runの2クロージャに跨って参照すると
+            // Swift 6の厳格な並行性チェックで警告になるため、`let`に固定してから渡す
+            // （一括タグ付けの`toggleTag(tagId:on:[ImageRecord])`と同じ対応）。
+            let finalSucceededTargets = succeededTargets
+            let finalFailedNames = failedNames
+            await MainActor.run {
+                if !finalSucceededTargets.isEmpty {
+                    do {
+                        try self.imageRepository.deleteImages(ids: finalSucceededTargets.map(\.id))
+                    } catch {
+                        self.presentAlert(message: "DBレコードの削除に失敗した", informative: "\(error)")
+                    }
+                    for image in finalSucceededTargets {
+                        self.thumbnailService.invalidate(imageId: image.id)
+                    }
+                    self.selectedImageIds.subtract(Set(finalSucceededTargets.map(\.id)))
+                }
+                self.reloadAll()
+                if finalFailedNames.isEmpty {
+                    self.showToast("\(finalSucceededTargets.count)件をバックアップフォルダへ移動したよ")
+                } else {
+                    self.presentAlert(
+                        message: "一部の移動に失敗した",
+                        informative: "\(finalSucceededTargets.count)件成功・\(finalFailedNames.count)件失敗。\(FailureSummary.text(names: finalFailedNames))"
                     )
                 }
             }
@@ -779,6 +937,23 @@ final class AppModel: ObservableObject {
         showToast("コピーしました")
     }
 
+    /// ComfyUI画像の「生JSONをコピー」ボタン用。構造化表示で拾いきれない情報の逃げ道として、
+    /// `PNG:Prompt`の生JSON文字列（ワークフロー全体）をそのままコピーする。
+    func copyComfyRawJSON(_ rawJSON: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(rawJSON, forType: .string)
+        showToast("生JSONをコピーしたよ")
+    }
+
+    /// NovelAI画像のseedコピー用（実際に使ってみてのフィードバックで追加：履歴を消しても
+    /// seedさえあれば同じ画像を起点に再生成できるため、NovelAIの入力欄にそのまま貼れる
+    /// 文字列としてコピーする）。
+    func copySeed(_ seed: Int64) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(String(seed), forType: .string)
+        showToast("Seedをコピーしたよ")
+    }
+
     // MARK: - パスコピー
 
     func copyPath(of image: ImageRecord) {
@@ -795,6 +970,48 @@ final class AppModel: ObservableObject {
             showToast("\(images.count)件をエクスポートしました")
         } catch {
             presentAlert(message: "エクスポートに失敗した", informative: "\(error)")
+        }
+    }
+
+    /// 選択画像本体を指定フォルダへコピーする（実際に使ってみてのフィードバックで追加：
+    /// 既存のJSONエクスポートはパス/プロンプト等のメタデータのみで、画像ファイル自体を
+    /// 書き出す手段が無かった。サブディレクトリで絞り込み→削除対象タグ付け→削除対象を除外→
+    /// 残った画像をまるっと作業用ディレクトリへコピー、という使い方を想定）。
+    /// コピーなので元ファイルはそのまま残り、DBレコードも変更しない（バックアップ移動と違い
+    /// 「移動」ではないため`imageRepository`には一切触れない）。同名衝突時は`UniqueFileNaming`
+    /// （バックアップ移動機能と共通）で連番を付けて回避する。
+    func copyImagesToFolder(_ images: [ImageRecord], to folderURL: URL) {
+        guard !images.isEmpty else { return }
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            let fileManager = FileManager.default
+            var existingNames = Set((try? fileManager.contentsOfDirectory(atPath: folderURL.path)) ?? [])
+            var succeededCount = 0
+            var failedNames: [String] = []
+            for image in images {
+                let destinationURL = UniqueFileNaming.uniqueDestinationURL(
+                    for: image.url, in: folderURL, existingNames: existingNames
+                )
+                do {
+                    try fileManager.copyItem(at: image.url, to: destinationURL)
+                    existingNames.insert(destinationURL.lastPathComponent)
+                    succeededCount += 1
+                } catch {
+                    failedNames.append(image.url.lastPathComponent)
+                }
+            }
+            let finalSucceededCount = succeededCount
+            let finalFailedNames = failedNames
+            await MainActor.run {
+                if finalFailedNames.isEmpty {
+                    self.showToast("\(finalSucceededCount)件の画像をコピーしたよ")
+                } else {
+                    self.presentAlert(
+                        message: "一部のコピーに失敗した",
+                        informative: "\(finalSucceededCount)件成功・\(finalFailedNames.count)件失敗。\(FailureSummary.text(names: finalFailedNames))"
+                    )
+                }
+            }
         }
     }
 

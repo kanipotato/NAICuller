@@ -9,6 +9,7 @@ struct DetailPanelView: View {
     @State private var newTagText = ""
     @State private var showAddTagPopover = false
     @State private var promptExpanded = false
+    @State private var negativePromptExpanded = false
     @State private var previewImage: NSImage?
     @State private var previewLoadedForId: Int64?
 
@@ -57,6 +58,7 @@ struct DetailPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: focusedImage?.id) { _ in
             promptExpanded = false
+            negativePromptExpanded = false
         }
     }
 
@@ -265,13 +267,92 @@ struct DetailPanelView: View {
         return formatter
     }()
 
-    // MARK: - 4. プロンプト（折りたたみ＋コピー）
+    // MARK: - 4. プロンプト / 生成情報（生成元によって出し分け。Stable Diffusion/ComfyUI対応で追加）
 
+    /// アプリ全体のモード切り替えはせず、画像1枚ごとに`sourcePlatform`で出し分ける
+    /// （NovelAI/ComfyUIが混在するライブラリでも破綻しない設計。Notion開発ログ参照）。
     @ViewBuilder
     private func promptSection(_ image: ImageRecord) -> some View {
+        if image.sourcePlatform == .comfyUI {
+            comfyGenerationInfoSection(image)
+        } else {
+            // .novelAIは「NAIプロンプト」、.unknownは既存通り「プロンプト」（判定できていないので
+            // NAI由来と決め打たない）。中身の表示ロジック自体はどちらも同じ。
+            naiPromptSection(image, title: image.sourcePlatform == .novelAI ? "NAIプロンプト" : "プロンプト")
+            if image.sourcePlatform == .novelAI {
+                Divider()
+                naiGenerationParamsSection(image)
+            }
+        }
+    }
+
+    /// NovelAI画像の生成パラメータ（seed等）。実際に使ってみてのフィードバックで追加：
+    /// NovelAIの履歴を消してもseedさえあれば同じ画像を起点に再生成できるため、
+    /// 履歴に依存しない形で残しておきたいという要望。`PNG:Comment`から抽出する。
+    @ViewBuilder
+    private func naiGenerationParamsSection(_ image: ImageRecord) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("生成パラメータ").font(.headline)
+
+            if let rawJSON = image.naiGenerationInfoJSON,
+               let info = NAIGenerationInfoParser.extract(from: rawJSON),
+               !info.isEmpty {
+                if let seed = info.seed {
+                    HStack(spacing: 4) {
+                        Text("Seed").font(.caption2).foregroundStyle(.secondary)
+                        Text("\(seed)").font(.caption).textSelection(.enabled)
+                        Button {
+                            appModel.copySeed(seed)
+                        } label: {
+                            Image(systemName: "doc.on.doc").font(.caption2)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Seedをコピー")
+                    }
+                }
+
+                let detailParts: [String] = [
+                    info.steps.map { "steps \($0)" },
+                    info.scale.map { "scale \(Self.formatted($0))" },
+                    info.sampler,
+                    info.noiseSchedule,
+                    info.smea == true ? "SMEA" : nil,
+                    info.smDyn == true ? "SMEA DYN" : nil
+                ].compactMap { $0 }
+                if !detailParts.isEmpty {
+                    Text(detailParts.joined(separator: " / "))
+                        .font(.caption)
+                        .textSelection(.enabled)
+                }
+
+                if let negative = info.negativePrompt, !negative.isEmpty {
+                    DisclosureGroup(isExpanded: $negativePromptExpanded) {
+                        Text(negative)
+                            .font(.caption)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 4)
+                    } label: {
+                        Text(negativePromptExpanded ? "ネガティブプロンプトを折りたたむ" : "ネガティブプロンプトを表示")
+                            .font(.caption)
+                    }
+                }
+            } else {
+                // v1時代からある既存画像は、この列を追加しただけでは中身が無い
+                // （PNG:Commentを一度も読んでいなかったため復元不可）。ExifToolでの
+                // 再読み込みが必要（詳細はNotion開発ログ参照）。
+                Text("生成パラメータを読み取れなかったよ")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func naiPromptSection(_ image: ImageRecord, title: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("プロンプト").font(.headline)
+                Text(title).font(.headline)
                 Spacer()
                 Button {
                     appModel.copyPrompt(of: image)
@@ -299,5 +380,91 @@ struct DetailPanelView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// ComfyUI画像の生成情報。ノード種別ごとに抽出・重複除去した内容を並べる。
+    /// 1枚のグラフに複数バッチ分のノードが記録されているケースでは複数件になりうる
+    /// （実データ調査で確認済み。「見つかった分だけ正直に列挙する」という設計方針）。
+    @ViewBuilder
+    private func comfyGenerationInfoSection(_ image: ImageRecord) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("生成情報（ComfyUI）").font(.headline)
+                Spacer()
+                if let rawJSON = image.comfyGenerationInfoJSON {
+                    Button {
+                        appModel.copyComfyRawJSON(rawJSON)
+                    } label: {
+                        Label("生JSONをコピー", systemImage: "doc.on.doc")
+                    }
+                }
+            }
+
+            if let rawJSON = image.comfyGenerationInfoJSON,
+               let info = ComfyUIWorkflowParser.extractGenerationInfo(from: rawJSON),
+               !info.isEmpty {
+                comfyGenerationInfoContent(info)
+            } else {
+                Text("生成情報を読み取れなかったよ")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func comfyGenerationInfoContent(_ info: ComfyUIGenerationInfo) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if !info.checkpoints.isEmpty {
+                comfyInfoGroup("モデル") {
+                    ForEach(info.checkpoints, id: \.self) { name in
+                        Text(name).font(.caption).textSelection(.enabled)
+                    }
+                }
+            }
+            if !info.loras.isEmpty {
+                comfyInfoGroup("LoRA（\(info.loras.count)件）") {
+                    ForEach(Array(info.loras.enumerated()), id: \.offset) { _, lora in
+                        Text("\(lora.name)（model \(Self.formatted(lora.strengthModel))・clip \(Self.formatted(lora.strengthClip))）")
+                            .font(.caption)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+            if !info.promptPairs.isEmpty {
+                comfyInfoGroup("プロンプト（\(info.promptPairs.count)件）") {
+                    ForEach(Array(info.promptPairs.enumerated()), id: \.offset) { _, pair in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("ポジティブ").font(.caption2).foregroundStyle(.secondary)
+                            Text(pair.positive).font(.caption).textSelection(.enabled)
+                            Text("ネガティブ").font(.caption2).foregroundStyle(.secondary).padding(.top, 2)
+                            Text(pair.negative).font(.caption).textSelection(.enabled)
+                        }
+                        .padding(.bottom, 4)
+                    }
+                }
+            }
+            if !info.samplerParams.isEmpty {
+                comfyInfoGroup("サンプラー設定（\(info.samplerParams.count)件）") {
+                    ForEach(Array(info.samplerParams.enumerated()), id: \.offset) { _, params in
+                        Text("seed \(params.seed) / steps \(params.steps) / cfg \(Self.formatted(params.cfg)) / \(params.samplerName) / \(params.scheduler)")
+                            .font(.caption)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func comfyInfoGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption.bold()).foregroundStyle(.secondary)
+            content()
+        }
+    }
+
+    private static func formatted(_ value: Double) -> String {
+        value.truncatingRemainder(dividingBy: 1) == 0 ? String(format: "%.0f", value) : String(format: "%.2f", value)
     }
 }

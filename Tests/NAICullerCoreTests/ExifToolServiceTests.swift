@@ -57,6 +57,18 @@ final class ExifToolServiceTests: XCTestCase {
         XCTAssertTrue(metadata.promptDescription!.contains("1girl"))
     }
 
+    /// 実データ検証結果の裏付け：PNG:CommentにNovelAI Diffusion V4.5形式の生成パラメータ
+    /// JSON（seed等）が入っており、`NAIGenerationInfoParser`で実際にseedまで取り出せること。
+    /// Stable Diffusion(ComfyUI)対応の続きで、NovelAI画像のseed表示を追加した際の実データ検証。
+    func testReadMetadataExtractsSeedFromComment() throws {
+        let metadata = try service.readMetadata(path: copiedFixturePath("sample1.png"))
+        XCTAssertNotNil(metadata.naiCommentJSON)
+        let info = NAIGenerationInfoParser.extract(from: metadata.naiCommentJSON!)
+        XCTAssertNotNil(info?.seed)
+        XCTAssertNotNil(info?.steps)
+        XCTAssertNotNil(info?.sampler)
+    }
+
     func testReadMetadataReturnsImageDimensions() throws {
         let metadata = try service.readMetadata(path: copiedFixturePath("sample1.png"))
         XCTAssertNotNil(metadata.width)

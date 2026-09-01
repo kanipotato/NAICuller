@@ -7,8 +7,13 @@ import Foundation
 /// 分岐の組み合わせが単体で確かめられなくなっていたため、`AppModel`（SwiftUI/AppKit依存・
 /// テスト不能）から切り離してCore層の純粋なデータとして持つ。
 public struct ImageFilterCriteria: Equatable, Sendable {
-    /// サイドバーでチェックが入っているルートのID。ここに無いルートの画像は常に除外する。
-    public var enabledRootIds: Set<Int64>
+    /// rootId→ルート絶対パス。ここに無いrootIdの画像は常に除外する（ルートが削除された場合など）。
+    /// フォルダツリー絞り込み機能の導入で`enabledRootIds`を廃止し、これと`folderVisibilityOverrides`に
+    /// 置き換えた（ツリーのルート直下ノードが旧`enabledRootIds`と同じ役割を果たすため）。
+    public var rootPaths: [Int64: String]
+    /// サイドバーのフォルダツリーで明示的に設定されたON/OFF。`FolderVisibilityResolver`が
+    /// 「最も近い祖先の設定が勝つ」方式で実効の表示/非表示を解決する。
+    public var folderVisibilityOverrides: [FolderVisibilityKey: Bool]
     /// タグ絞り込み（AND条件：選択した全タグを持つ画像のみ残す）。空なら絞り込まない。
     public var selectedTagIds: Set<Int64>
     /// 「未タグのみ表示」。trueのときは`selectedTagIds`より優先され、タグを1つも持たない画像だけ残す
@@ -21,21 +26,28 @@ public struct ImageFilterCriteria: Equatable, Sendable {
     public var promptSearchText: String
     /// プロンプト候補絞り込みで選ばれた語句（AND条件：全部含む画像のみ残す）。空なら絞り込まない。
     public var selectedPromptTerms: Set<String>
+    /// サイドバーでチェックが入っている生成元プラットフォーム。ここに無いプラットフォームの
+    /// 画像は除外する（Stable Diffusion/ComfyUI対応で追加。他条件と同じくAND結合の一部）。
+    public var enabledSourcePlatforms: Set<ImageSourcePlatform>
 
     public init(
-        enabledRootIds: Set<Int64> = [],
+        rootPaths: [Int64: String] = [:],
+        folderVisibilityOverrides: [FolderVisibilityKey: Bool] = [:],
         selectedTagIds: Set<Int64> = [],
         showUntaggedOnly: Bool = false,
         hiddenDeletionMarkTagId: Int64? = nil,
         promptSearchText: String = "",
-        selectedPromptTerms: Set<String> = []
+        selectedPromptTerms: Set<String> = [],
+        enabledSourcePlatforms: Set<ImageSourcePlatform> = Set(ImageSourcePlatform.allCases)
     ) {
-        self.enabledRootIds = enabledRootIds
+        self.rootPaths = rootPaths
+        self.folderVisibilityOverrides = folderVisibilityOverrides
         self.selectedTagIds = selectedTagIds
         self.showUntaggedOnly = showUntaggedOnly
         self.hiddenDeletionMarkTagId = hiddenDeletionMarkTagId
         self.promptSearchText = promptSearchText
         self.selectedPromptTerms = selectedPromptTerms
+        self.enabledSourcePlatforms = enabledSourcePlatforms
     }
 }
 
@@ -55,7 +67,14 @@ public enum ImageFilter {
         promptTerms: (ImageRecord) -> Set<String>
     ) -> [ImageRecord] {
         images.filter { image in
-            guard criteria.enabledRootIds.contains(image.rootId) else { return false }
+            // 生成元プラットフォームの絞り込み（O(1)）を先に見てから、パス解析を伴うフォルダ判定に進む
+            // （レビュー指摘：安いガードを先に置くことでフォルダ判定の文字列処理を無駄に走らせない）。
+            guard criteria.enabledSourcePlatforms.contains(image.sourcePlatform) else { return false }
+            guard FolderVisibilityResolver.isImageVisible(
+                image,
+                rootPaths: criteria.rootPaths,
+                overrides: criteria.folderVisibilityOverrides
+            ) else { return false }
 
             if criteria.showUntaggedOnly {
                 guard (imageTagIds[image.id] ?? []).isEmpty else { return false }
