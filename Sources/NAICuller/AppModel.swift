@@ -21,7 +21,9 @@ final class AppModel: ObservableObject {
     private(set) var thumbnailService: ThumbnailService!
     private(set) var exportService = ExportService()
     private(set) var quickLookController: QuickLookController!
-    private var exifToolService: ExifToolService?
+    /// タグ付け（`AppModelTagging.swift`）からも使うため internal。
+    /// Swiftのprivateはファイルスコープなので、同じ型のextensionでもファイルが分かれると届かない。
+    var exifToolService: ExifToolService?
     private var scanService: ScanService?
 
     /// bg-splitter（背景透過・シート分割）連携。アプリ本体の状態と共有するものが無い
@@ -190,7 +192,9 @@ final class AppModel: ObservableObject {
         var destination: DeletionDestination
     }
     @Published var pendingDeletion: PendingDeletion?
-    @Published private(set) var pendingDeletionCount: Int = 0
+    /// 確認ダイアログに出す対象件数。`AppModelDeletionMove.swift`（同じ型のextension）から
+    /// 更新するため、setterもファイル外に見せている。
+    @Published var pendingDeletionCount: Int = 0
 
     private var toastDismissTask: Task<Void, Never>?
     private var searchDebounceTask: Task<Void, Never>?
@@ -210,7 +214,7 @@ final class AppModel: ObservableObject {
     /// 防ぐための進行中セット（レビュー指摘の修正：キーリピート等で同じキーが連打されると、
     /// 1回目の完了を待たずに2回目が同じ`currentlyTagged`スナップショットを読んでしまい、
     /// add/removeが二重に走りうる）。キーは"\(imageId)-\(tagId)"。
-    private var inFlightToggles: Set<String> = []
+    var inFlightToggles: Set<String> = []
 
     // MARK: - 起動
 
@@ -522,363 +526,6 @@ final class AppModel: ObservableObject {
         showOrphanConfirmation = false
     }
 
-    // MARK: - 削除対象タグの一括移動（実際に使ってみてのフィードバックで追加）
-    //
-    // ドラフト段階の設計方針「アプリはファイルシステムに破壊的操作をしない」から意図的に外れる
-    // 例外。ドラフトの「懸念・未解決」でも「ゴミ箱移動(NSWorkspace.recycle)は初版スコープ外。
-    // 将来必要なら追加検討」と明記していた、その"将来"が実際に来た形。事故を避けるため、
-    // 完全削除は一切せず、対象は常に「削除対象タグが付いている画像」だけに厳密に絞る
-    // （選択に紛れ込んだ未タグの画像は対象外として黙って除外する）。移動先は「ゴミ箱」（復元可能）
-    // か「ユーザーが選んだバックアップフォルダ」の2択（実際に使ってみての要望：「何かに使うかも
-    // しれないから完全に消したくない、バックアップフォルダへ移動したい」で追加）。
-
-    /// 選択中の画像のうち「削除対象」タグが付いているものだけを数え、確認ダイアログの表示を要求する。
-    /// 実際の移動はconfirmPendingDeletion()を呼ぶまで実行しない。
-    func requestMoveSelectedMarkedImages(to destination: DeletionDestination) {
-        let targets = selectedMarkedImages()
-        guard !targets.isEmpty else {
-            showToast("選択中に「削除対象」タグの画像が無いよ")
-            return
-        }
-        pendingDeletionCount = targets.count
-        pendingDeletion = PendingDeletion(scope: .selected, destination: destination)
-    }
-
-    /// ライブラリ全体で「削除対象」タグが付いている画像（選択状態やフィルタとは無関係）を数え、
-    /// 確認ダイアログの表示を要求する。
-    func requestMoveAllMarkedImages(to destination: DeletionDestination) {
-        let targets = allMarkedImages()
-        guard !targets.isEmpty else {
-            showToast("「削除対象」タグの画像が無いよ")
-            return
-        }
-        pendingDeletionCount = targets.count
-        pendingDeletion = PendingDeletion(scope: .all, destination: destination)
-    }
-
-    /// バックアップフォルダを選ぶダイアログを出し、選ばれたら移動を要求する
-    /// （確認ダイアログはこの後`pendingDeletion`経由で別途出る）。キャンセル時は何もしない。
-    func chooseBackupFolderAndRequestMove(scope: DeletionScope) {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "選択"
-        panel.message = "移動先のバックアップフォルダを選んでね"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        switch scope {
-        case .selected: requestMoveSelectedMarkedImages(to: .backupFolder(url))
-        case .all: requestMoveAllMarkedImages(to: .backupFolder(url))
-        }
-    }
-
-    func confirmPendingDeletion() {
-        guard let pending = pendingDeletion else { return }
-        let targets = pending.scope == .selected ? selectedMarkedImages() : allMarkedImages()
-        pendingDeletion = nil
-        switch pending.destination {
-        case .trash:
-            performTrashDeletion(targets)
-        case .backupFolder(let url):
-            performBackupMove(targets, to: url)
-        }
-    }
-
-    func cancelPendingDeletion() {
-        pendingDeletion = nil
-    }
-
-    private func deletionMarkTagId() -> Int64? {
-        tags.first(where: { $0.name == Tag.SystemTagName.deletionMark })?.id
-    }
-
-    private func selectedMarkedImages() -> [ImageRecord] {
-        guard let tagId = deletionMarkTagId() else { return [] }
-        let markedIds = (try? tagRepository.imageIds(taggedWith: tagId)) ?? []
-        return images.filter { selectedImageIds.contains($0.id) && markedIds.contains($0.id) }
-    }
-
-    private func allMarkedImages() -> [ImageRecord] {
-        guard let tagId = deletionMarkTagId() else { return [] }
-        let markedIds = (try? tagRepository.imageIds(taggedWith: tagId)) ?? []
-        return images.filter { markedIds.contains($0.id) }
-    }
-
-    /// 実際にゴミ箱へ移動する（`NSWorkspace.recycle`。完全削除ではなく復元可能な移動）。
-    /// 移動に成功したものだけDBレコードを削除する（ExifTool書き込みの成否でDB更新を判断する
-    /// 既存のタグ付けロジックと同じ考え方：ファイル操作が実際に成功した分だけ反映する）。
-    private func performTrashDeletion(_ targets: [ImageRecord]) {
-        guard !targets.isEmpty else { return }
-        let urls = targets.map(\.url)
-        NSWorkspace.shared.recycle(urls) { [weak self] newURLs, error in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                // 元URLと返却キーの表記ゆれ（シンボリックリンク解決・パス正規化）を吸収する
-                // 突き合わせは、実バグを踏んだ箇所なのでCore層のTrashResultReconcilerに
-                // 切り出してテストで固定してある。
-                let succeededTargets = TrashResultReconciler.succeeded(
-                    targets: targets,
-                    recycledOriginalURLs: newURLs.keys
-                )
-                let failedCount = targets.count - succeededTargets.count
-                if !succeededTargets.isEmpty {
-                    do {
-                        try self.imageRepository.deleteImages(ids: succeededTargets.map(\.id))
-                    } catch {
-                        self.presentAlert(message: "DBレコードの削除に失敗した", informative: "\(error)")
-                    }
-                    for image in succeededTargets {
-                        self.thumbnailService.invalidate(imageId: image.id)
-                    }
-                    self.selectedImageIds.subtract(Set(succeededTargets.map(\.id)))
-                }
-                self.reloadAll()
-                if failedCount == 0 {
-                    self.showToast("\(succeededTargets.count)件をゴミ箱へ移動したよ")
-                } else {
-                    self.presentAlert(
-                        message: "一部の移動に失敗した",
-                        informative: "\(succeededTargets.count)件成功・\(failedCount)件失敗。\(error.map { "\($0)" } ?? "")"
-                    )
-                }
-            }
-        }
-    }
-
-    /// 実際にバックアップフォルダへ移動する（`FileManager.moveItem`）。同名ファイルが既に
-    /// 移動先にあっても上書きせず、`UniqueFileNaming`で連番を付けて回避する（Finderの
-    /// 「コピー - ファイル名 2.png」と同じ考え方）。移動はディスクI/Oを伴うため
-    /// メインスレッドをブロックしないよう`Task.detached`で行う（`rescan()`と同じ方針）。
-    /// 移動に成功したものだけDBレコードを削除する（トラッシュ移動と同じ考え方）。
-    private func performBackupMove(_ targets: [ImageRecord], to folderURL: URL) {
-        guard !targets.isEmpty else { return }
-        Task.detached(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
-            let fileManager = FileManager.default
-            var existingNames = Set((try? fileManager.contentsOfDirectory(atPath: folderURL.path)) ?? [])
-            var succeededTargets: [ImageRecord] = []
-            var failedNames: [String] = []
-            for image in targets {
-                let destinationURL = UniqueFileNaming.uniqueDestinationURL(
-                    for: image.url, in: folderURL, existingNames: existingNames
-                )
-                do {
-                    try fileManager.moveItem(at: image.url, to: destinationURL)
-                    existingNames.insert(destinationURL.lastPathComponent)
-                    succeededTargets.append(image)
-                } catch {
-                    failedNames.append(image.url.lastPathComponent)
-                }
-            }
-            // `var`のままTask.detachedとMainActor.runの2クロージャに跨って参照すると
-            // Swift 6の厳格な並行性チェックで警告になるため、`let`に固定してから渡す
-            // （一括タグ付けの`toggleTag(tagId:on:[ImageRecord])`と同じ対応）。
-            let finalSucceededTargets = succeededTargets
-            let finalFailedNames = failedNames
-            await MainActor.run {
-                if !finalSucceededTargets.isEmpty {
-                    do {
-                        try self.imageRepository.deleteImages(ids: finalSucceededTargets.map(\.id))
-                    } catch {
-                        self.presentAlert(message: "DBレコードの削除に失敗した", informative: "\(error)")
-                    }
-                    for image in finalSucceededTargets {
-                        self.thumbnailService.invalidate(imageId: image.id)
-                    }
-                    self.selectedImageIds.subtract(Set(finalSucceededTargets.map(\.id)))
-                }
-                self.reloadAll()
-                if finalFailedNames.isEmpty {
-                    self.showToast("\(finalSucceededTargets.count)件をバックアップフォルダへ移動したよ")
-                } else {
-                    self.presentAlert(
-                        message: "一部の移動に失敗した",
-                        informative: "\(finalSucceededTargets.count)件成功・\(finalFailedNames.count)件失敗。\(FailureSummary.text(names: finalFailedNames))"
-                    )
-                }
-            }
-        }
-    }
-
-    // MARK: - タグ付け（4-2章：F/G/1-9共通のトグル機構）
-
-    /// タグ付けをトグルする。画像ファイル側への書き込みが成功した場合のみDBを更新する
-    /// （詳細設計 4-2章：「ExifTool書き込みが失敗したら？ → DBの状態は変更しない」）。
-    func toggleTag(tagId: Int64, on image: ImageRecord) {
-        guard let exifToolService else {
-            presentAlert(message: "ExifToolが利用できないためタグ付けできない", informative: nil)
-            return
-        }
-        guard let tag = tags.first(where: { $0.id == tagId }) else { return }
-        let key = "\(image.id)-\(tagId)"
-        // 同じ(画像, タグ)への書き込みが既に進行中なら、キーリピート等による二重トグルとして無視する。
-        guard !inFlightToggles.contains(key) else { return }
-        inFlightToggles.insert(key)
-        let currentlyTagged = imageTagIds[image.id]?.contains(tagId) ?? false
-
-        Task.detached(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
-            do {
-                if currentlyTagged {
-                    try exifToolService.removeTag(tag.name, from: image.path)
-                } else {
-                    try exifToolService.addTag(tag.name, to: image.path)
-                }
-                await MainActor.run {
-                    do {
-                        if currentlyTagged {
-                            try self.tagRepository.removeTagFromImage(imageId: image.id, tagId: tagId)
-                        } else {
-                            try self.tagRepository.addTagToImage(imageId: image.id, tagId: tagId)
-                        }
-                        self.reloadTags()
-                        self.reloadImages()
-                    } catch {
-                        self.presentAlert(message: "DBの更新に失敗した", informative: "\(error)")
-                    }
-                    self.inFlightToggles.remove(key)
-                }
-            } catch {
-                await MainActor.run {
-                    // 詳細設計 5章：ExifTool書き込み失敗 → トースト通知でファイル名とエラー内容を表示。DBは変更しない。
-                    self.showToast("「\(image.url.lastPathComponent)」へのタグ付けに失敗: \(error)")
-                    self.inFlightToggles.remove(key)
-                }
-            }
-        }
-    }
-
-    /// キー割当（F/G/1〜9）からタグを引いてトグルする。KeyCommandHandlerから呼ばれる。
-    /// 複数選択中は選択中の全画像に一括適用する。
-    func toggleTag(forKey key: String, on images: [ImageRecord]) {
-        guard let tag = tags.first(where: { $0.keyBinding == key }) else { return } // 未設定なら何もしない（4-2章）
-        toggleTag(tagId: tag.id, on: images)
-    }
-
-    /// 複数選択がある場合の一括タグ付け（実際に使ってみてのフィードバックを受けて追加。
-    /// 詳細設計では「複数選択時の一括タグ付け」をMVP外としていたが、キーボード操作の
-    /// 自然な延長として必要だった）。
-    ///
-    /// Photos.app等と同じトライステート方式：選択中の全画像が既にタグを持っていれば全て外す、
-    /// そうでなければ（1件でも未タグがあれば）全てに付ける。1枚だけの選択は単体版と同じ挙動になる
-    /// （単体版のガード・エラー表示をそのまま再利用するため、1枚のときはそちらに委譲する）。
-    func toggleTag(tagId: Int64, on images: [ImageRecord]) {
-        guard !images.isEmpty else { return }
-        guard images.count > 1 else {
-            toggleTag(tagId: tagId, on: images[0])
-            return
-        }
-        guard let exifToolService else {
-            presentAlert(message: "ExifToolが利用できないためタグ付けできない", informative: nil)
-            return
-        }
-        guard let tag = tags.first(where: { $0.id == tagId }) else { return }
-
-        // トライステートの判断（付けるか外すか・どれを触るか）は純粋ロジックとして
-        // Core層のBatchTagToggleに切り出してある。
-        let plan = BatchTagToggle.plan(images: images, tagId: tagId, imageTagIds: imageTagIds)
-        guard !plan.isNoOp else { return }
-        let shouldAdd = plan.shouldAdd
-        let targets = plan.targets
-
-        let keys = targets.map { "\($0.id)-\(tagId)" }
-        guard keys.allSatisfy({ !inFlightToggles.contains($0) }) else { return }
-        inFlightToggles.formUnion(keys)
-
-        Task.detached(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
-            var writeSucceeded: [Int64] = []
-            var writeFailed: [String] = []
-            for image in targets {
-                do {
-                    if shouldAdd {
-                        try exifToolService.addTag(tag.name, to: image.path)
-                    } else {
-                        try exifToolService.removeTag(tag.name, from: image.path)
-                    }
-                    writeSucceeded.append(image.id)
-                } catch {
-                    writeFailed.append(image.url.lastPathComponent)
-                }
-            }
-            // ここから先はMainActor.run側のクロージャに渡すだけの読み取り専用データにする。
-            // varのまま`Task.detached`と`MainActor.run`の2つのクロージャに跨って参照/mutateすると
-            // Swift 6の厳格な並行性チェックで警告（将来的にはエラー）になるため、`let`に固定してから渡す。
-            let succeededIds = writeSucceeded
-            let writeFailedNames = writeFailed
-            await MainActor.run {
-                // コードレビュー指摘の修正：以前は成功/失敗の件数しか出さず、単体版
-                // （`toggleTag(tagId:on:ImageRecord)`）と違ってどのファイルがなぜ失敗したか
-                // 分からなかった。ファイル名を集約し、失敗があるときは（単体版と同じ重み付けで）
-                // トーストではなくモーダルアラートで出す。
-                var dbFailedNames: [String] = []
-                for imageId in succeededIds {
-                    do {
-                        if shouldAdd {
-                            try self.tagRepository.addTagToImage(imageId: imageId, tagId: tagId)
-                        } else {
-                            try self.tagRepository.removeTagFromImage(imageId: imageId, tagId: tagId)
-                        }
-                    } catch {
-                        if let name = targets.first(where: { $0.id == imageId })?.url.lastPathComponent {
-                            dbFailedNames.append(name)
-                        }
-                    }
-                }
-                self.reloadTags()
-                self.reloadImages()
-                self.inFlightToggles.subtract(keys)
-                let allFailedNames = writeFailedNames + dbFailedNames
-                let updatedCount = succeededIds.count - dbFailedNames.count
-                if allFailedNames.isEmpty {
-                    self.showToast("\(updatedCount)件のタグを更新したよ")
-                } else {
-                    self.presentAlert(
-                        message: "一部のタグ付けに失敗した",
-                        informative: "\(updatedCount)件成功。失敗: \(FailureSummary.text(names: allFailedNames))"
-                    )
-                }
-            }
-        }
-    }
-
-    /// 自由入力タグの追加。既存タグがあれば（大文字小文字区別なく）それに紐付け、新規作成しない。
-    func addFreeTag(name rawName: String, to image: ImageRecord) {
-        guard let normalized = TagNameValidator.normalize(rawName) else { return }
-        guard let exifToolService else { return }
-        do {
-            let tagId: Int64
-            if let existing = try tagRepository.fetchByNameCaseInsensitive(normalized) {
-                tagId = existing.id
-            } else {
-                tagId = try tagRepository.insertUserTag(name: normalized)
-            }
-            let tagName = normalized
-            Task.detached(priority: .userInitiated) { [weak self] in
-                guard let self else { return }
-                do {
-                    try exifToolService.addTag(tagName, to: image.path)
-                    await MainActor.run {
-                        try? self.tagRepository.addTagToImage(imageId: image.id, tagId: tagId)
-                        self.reloadTags()
-                        self.reloadImages()
-                    }
-                } catch {
-                    await MainActor.run {
-                        self.showToast("タグ追加に失敗: \(error)")
-                    }
-                }
-            }
-        } catch {
-            presentAlert(message: "タグの作成に失敗した", informative: "\(error)")
-        }
-    }
-
-    func removeFreeTag(tagId: Int64, from image: ImageRecord) {
-        toggleTag(tagId: tagId, on: image)
-    }
-
     // MARK: - カスタムタグのキー割当（設定画面）
 
     /// 1〜9キーへのカスタムタグ割当。同じキーへの重複割当は上書き確認が必要
@@ -1027,7 +674,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func presentAlert(message: String, informative: String?) {
+    func presentAlert(message: String, informative: String?) {
         AlertPresenter.warn(message: message, informative: informative)
     }
 
