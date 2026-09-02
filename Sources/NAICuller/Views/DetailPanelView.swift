@@ -228,14 +228,14 @@ struct DetailPanelView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("システム情報").font(.headline)
             infoRow("パス", image.path) { appModel.copyPath(of: image) }
-            if let width = image.width, let height = image.height {
-                infoRow("サイズ", "\(width) × \(height)")
+            if let dimensions = DisplayFormatting.imageDimensions(width: image.width, height: image.height) {
+                infoRow("サイズ", dimensions)
             }
-            infoRow("ファイルサイズ", ByteCountFormatter.string(fromByteCount: image.fileSize, countStyle: .file))
+            infoRow("ファイルサイズ", DisplayFormatting.fileSize(image.fileSize))
             if let creationDate = creationDate(for: image.path) {
-                infoRow("作成日時", Self.dateFormatter.string(from: creationDate))
+                infoRow("作成日時", DisplayFormatting.dateTime(creationDate))
             }
-            infoRow("最終スキャン", Self.dateFormatter.string(from: image.lastScannedAt))
+            infoRow("最終スキャン", DisplayFormatting.dateTime(image.lastScannedAt))
         }
     }
 
@@ -260,12 +260,6 @@ struct DetailPanelView: View {
         (try? FileManager.default.attributesOfItem(atPath: path))?[.creationDate] as? Date
     }
 
-    private static let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter
-    }()
 
     // MARK: - 4. プロンプト / 生成情報（生成元によって出し分け。Stable Diffusion/ComfyUI対応で追加）
 
@@ -313,7 +307,7 @@ struct DetailPanelView: View {
 
                 let detailParts: [String] = [
                     info.steps.map { "steps \($0)" },
-                    info.scale.map { "scale \(Self.formatted($0))" },
+                    info.scale.map { "scale \(DisplayFormatting.parameterValue($0))" },
                     info.sampler,
                     info.noiseSchedule,
                     info.smea == true ? "SMEA" : nil,
@@ -425,7 +419,7 @@ struct DetailPanelView: View {
             if !info.loras.isEmpty {
                 comfyInfoGroup("LoRA（\(info.loras.count)件）") {
                     ForEach(Array(info.loras.enumerated()), id: \.offset) { _, lora in
-                        Text("\(lora.name)（model \(Self.formatted(lora.strengthModel))・clip \(Self.formatted(lora.strengthClip))）")
+                        Text("\(lora.name)（model \(DisplayFormatting.parameterValue(lora.strengthModel))・clip \(DisplayFormatting.parameterValue(lora.strengthClip))）")
                             .font(.caption)
                             .textSelection(.enabled)
                     }
@@ -447,7 +441,7 @@ struct DetailPanelView: View {
             if !info.samplerParams.isEmpty {
                 comfyInfoGroup("サンプラー設定（\(info.samplerParams.count)件）") {
                     ForEach(Array(info.samplerParams.enumerated()), id: \.offset) { _, params in
-                        Text("seed \(params.seed) / steps \(params.steps) / cfg \(Self.formatted(params.cfg)) / \(params.samplerName) / \(params.scheduler)")
+                        Text("seed \(params.seed) / steps \(params.steps) / cfg \(DisplayFormatting.parameterValue(params.cfg)) / \(params.samplerName) / \(params.scheduler)")
                             .font(.caption)
                             .textSelection(.enabled)
                     }
@@ -464,7 +458,4 @@ struct DetailPanelView: View {
         }
     }
 
-    private static func formatted(_ value: Double) -> String {
-        value.truncatingRemainder(dividingBy: 1) == 0 ? String(format: "%.0f", value) : String(format: "%.2f", value)
-    }
 }
