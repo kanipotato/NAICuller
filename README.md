@@ -98,9 +98,19 @@ open ~/Applications/NAICuller.app
 
 ディレクトリ構成:
 
-- `Sources/NAICullerCore/` : DB(`DatabaseService`/`ImageRepository`/`TagRepository`)・ExifTool連携(`ExifToolProcess`/`ExifToolService`)・スキャン差分判定(`ScanService`)・サムネイル生成(`ThumbnailService`)・エクスポート(`ExportService`)・bg-splitter連携(`BgSplitterService`)・フォルダツリーと絞り込み(`FolderTree`/`ImageFilter`/`MarkedImageSelector`)・生成元判定(`ImageSourcePlatform`/`NAIGenerationInfoParser`)・バリデーション(`TagNameValidator`/`RootPathValidator`)など、SwiftUI/AppKitに依存しない純粋なロジック
+- `Sources/NAICullerCore/` : DB(`DatabaseService`/`ImageRepository`/`TagRepository`)・ExifTool連携(`ExifToolProcess`/`ExifToolService`)・スキャン差分判定(`ScanService`)・サムネイル生成(`ThumbnailService`)・エクスポート(`ExportService`)・bg-splitter連携(`BgSplitterService`)・フォルダツリーと絞り込み(`FolderTree`/`ImageFilter`/`MarkedImageSelector`)・表示整形(`DisplayFormatting`)・生成元判定(`ImageSourcePlatform`/`NAIGenerationInfoParser`)・バリデーション(`TagNameValidator`/`RootPathValidator`)など、SwiftUI/AppKitに依存しない純粋なロジック
 - `Sources/NAICuller/` : `NAICullerApp.swift`（アプリ本体）、`AppModel.swift`（状態管理）、`AppModelDeletionMove.swift`（削除対象の一括移動。AppModelのextension）、`BgSplitter/`（bg-splitter連携）、`Views/`（UI本体）、`KeyHandling/`（キーボード操作）
 - `Tests/NAICullerCoreTests/` : `swift test` で実行する単体・結合テスト（ExifToolServiceTestsは実際にNovelAI生成PNGでexiftoolサブプロセスを起動する結合テスト）
+
+## 開発
+
+```sh
+./scripts/verify.sh
+```
+
+ビルド（警告が1件でもあれば失敗扱い）・テスト・実起動・公開リポ向けの個人パス混入チェックをまとめて行う。「動作確認した」と言う前にこれを通す。
+
+起動確認は**プロセスの生存とログにエラーが無いことの両方**を満たした場合のみ成功とみなす。プロセスの有無だけで判定すると、実際は起動に失敗しているのに成功と読み違える。
 
 ## タグの保存先
 
